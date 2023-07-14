@@ -213,7 +213,7 @@ impl SelectedState {
         objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
         commands: &mut Commands,
     ) {
-        // Handle deletion of selected entity?
+        // TODO: Handle deletion of selected entity?
         let (_, _, mut transform) = objects.get_mut(self.entity).unwrap();
         transform.translation.z = self.prev_z_index;
         self.anchors.despawn_anchors(commands);
@@ -495,9 +495,14 @@ fn setup_editor(
 fn cleanup_editor(
     mut commands: Commands,
     mut world: ResMut<World>,
-    objects: Query<(Entity, &WorldObject, &Transform)>,
+    mut ui_state: ResMut<EditorUiState>,
+    mut objects: Query<(Entity, &mut WorldObject, &mut Transform)>,
     anchors: Query<Entity, (With<Anchor>, Without<WorldObject>)>,
 ) {
+    if let Some(selected_state) = ui_state.selected.take() {
+        selected_state.clear_selection(&mut objects, &mut commands);
+    }
+
     for anchor in anchors.iter() {
         commands.entity(anchor).despawn();
     }
@@ -577,12 +582,20 @@ fn editor_ui_system(
         if ui.button("Play world").clicked() {
             next_state.set(AppState::Game);
         }
+
+        let has_goal = objects.iter().any(|(_, object, _)| matches!(object, WorldObject::Goal));
+
+        if has_goal && ui.button("Train agent on world").clicked() {
+            next_state.set(AppState::Train);
+            return;
+        }
+
         if ui.button("Open").clicked() {
             if let Some(path) = rfd::FileDialog::new().pick_file() {
                 let new_world: Result<World, _> =
                     serde_json::from_str(&fs::read_to_string(path).unwrap());
                 if let Ok(new_world) = new_world {
-                    // Add a check for player in the world.
+                    // TODO: Add a check for player in the world.
                     *world = new_world;
                     load_world(
                         &world,
@@ -608,7 +621,7 @@ fn editor_ui_system(
                     })
                     .collect();
                 let world = World { objects };
-                // Write may fail - remove the unwrap.
+                // TODO: Write may fail - remove the unwrap.
                 fs::write(path, serde_json::to_string(&world).unwrap()).unwrap();
             }
         }

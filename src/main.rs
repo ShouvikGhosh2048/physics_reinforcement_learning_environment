@@ -1,13 +1,14 @@
 mod common;
 mod editor;
 mod game;
+mod train;
 use common::{AppState, World};
 use editor::add_editor_systems;
 use game::add_game_systems;
+use train::add_train_systems;
 
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
-use bevy_rapier2d::prelude::*;
 
 fn main() {
     let mut app = App::new();
@@ -16,10 +17,10 @@ fn main() {
         .add_state::<AppState>()
         .add_plugins(DefaultPlugins)
         .add_plugin(EguiPlugin)
-        .add_plugin(RapierPhysicsPlugin::<NoUserData>::pixels_per_meter(100.0))
         .add_startup_system(setup_graphics);
     add_editor_systems(&mut app);
     add_game_systems(&mut app);
+    add_train_systems(&mut app);
     app.run();
 }
 
