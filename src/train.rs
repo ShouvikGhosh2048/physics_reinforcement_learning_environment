@@ -27,80 +27,99 @@ fn ui_system(
     world: Res<World>,
     visualization_objects: Query<Entity, With<VisualizationObject>>,
 ) {
-    egui::Window::new("Train agents").show(contexts.ctx_mut(), |ui| {
-        let UiState {
-            agent_reciever,
-            agents,
-            ..
-        } = &mut *ui_state;
-        if let Some(agent_reciever) = agent_reciever {
-            agents.extend(agent_reciever.try_iter().take(1000)); // Take atmost 1000 at a time.
-        }
-
-        if ui.button("Back to editor").clicked() {
-            next_state.set(AppState::Editor);
-        }
-
-        match &ui_state.view {
-            View::Select => {
-                ui.horizontal(|ui| {
-                    ui.label("Number of steps: ");
-                    ui.add(
-                        egui::DragValue::new(&mut ui_state.number_of_steps).clamp_range(1..=100000),
-                    );
-                });
-
-                let agent_type = match ui_state.agent {
-                    Algorithm::Genetic { .. } => "Genetic",
-                };
-                ui.horizontal(|ui| {
-                    ui.label("Algorithm: ");
-                    egui::ComboBox::from_id_source("Algorithm")
-                        .selected_text(agent_type)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(
-                                &mut ui_state.agent,
-                                Algorithm::Genetic {
-                                    number_of_agents: 10,
-                                },
-                                "Genetic",
-                            );
-                        });
-                });
-
-                ui.label("Algorithm properties");
-                match &mut ui_state.agent {
-                    Algorithm::Genetic { number_of_agents } => {
-                        ui.horizontal(|ui| {
-                            ui.label("Number of agents: ");
-                            ui.add(egui::DragValue::new(number_of_agents).clamp_range(10..=1000));
-                        });
-                    }
-                }
-
-                if ui.button("Train").clicked() {
-                    ui_state.view = View::Train;
-                    ui_state.agent_reciever = Some(spawn_training_thread(
-                        ui_state.number_of_steps,
-                        &ui_state.agent,
-                        &world,
-                    ));
-                }
+    egui::Window::new("Train agents")
+        .scroll2([false, true])
+        .show(contexts.ctx_mut(), |ui| {
+            let UiState {
+                agent_reciever,
+                agents,
+                ..
+            } = &mut *ui_state;
+            if let Some(agent_reciever) = agent_reciever {
+                agents.extend(agent_reciever.try_iter().take(1000)); // Take atmost 1000 at a time.
             }
-            View::Train => {
-                let UiState {
-                    agents,
-                    view,
-                    agent_reciever,
-                    ..
-                } = &mut *ui_state;
-                if ui.button("Back to select").clicked() {
-                    *view = View::Select;
-                    *agent_reciever = None;
-                    agents.clear();
-                }
 
-                egui::ScrollArea::vertical().show(ui, |ui| {
+            match &ui_state.view {
+                View::Select => {
+                    if ui.button("Back to editor").clicked() {
+                        next_state.set(AppState::Editor);
+                    }
+
+                    ui.add_space(10.0);
+
+                    egui::Grid::new("Selection grid")
+                        .spacing([25.0, 5.0])
+                        .show(ui, |ui| {
+                            ui.label("Number of steps: ");
+                            ui.add(
+                                egui::DragValue::new(&mut ui_state.number_of_steps)
+                                    .clamp_range(1..=100000),
+                            );
+                            ui.end_row();
+
+                            let agent_type = match ui_state.agent {
+                                Algorithm::Genetic { .. } => "Genetic",
+                            };
+                            ui.label("Algorithm: ");
+                            egui::ComboBox::from_id_source("Algorithm")
+                                .selected_text(agent_type)
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(
+                                        &mut ui_state.agent,
+                                        Algorithm::Genetic {
+                                            number_of_agents: 1000,
+                                            repeat_move: 10,
+                                        },
+                                        "Genetic",
+                                    );
+                                });
+                            ui.end_row();
+
+                            ui.label("Algorithm properties:");
+                            ui.end_row();
+                            match &mut ui_state.agent {
+                                Algorithm::Genetic {
+                                    number_of_agents,
+                                    repeat_move,
+                                } => {
+                                    ui.label("Number of agents: ");
+                                    ui.add(
+                                        egui::DragValue::new(number_of_agents)
+                                            .clamp_range(10..=1000),
+                                    );
+                                    ui.end_row();
+                                    ui.label("Repeat move: ");
+                                    ui.add(egui::DragValue::new(repeat_move).clamp_range(1..=100));
+                                    ui.end_row();
+                                }
+                            }
+
+                            if ui.button("Train").clicked() {
+                                ui_state.view = View::Train;
+                                ui_state.agent_reciever = Some(spawn_training_thread(
+                                    ui_state.number_of_steps,
+                                    &ui_state.agent,
+                                    &world,
+                                ));
+                            }
+                            ui.end_row();
+                        });
+                }
+                View::Train => {
+                    let UiState {
+                        agents,
+                        view,
+                        agent_reciever,
+                        ..
+                    } = &mut *ui_state;
+                    if ui.button("Back to select").clicked() {
+                        *view = View::Select;
+                        *agent_reciever = None;
+                        agents.clear();
+                    }
+
+                    ui.add_space(10.0);
+
                     for (score, agent) in agents.iter() {
                         ui.horizontal(|ui| {
                             ui.label(format!("Score {}", score));
@@ -115,24 +134,27 @@ fn ui_system(
                             }
                         });
                     }
-                });
+                }
+                View::Visualize { environment, .. } => {
+                    let mut back_to_train = false;
+                    if ui.button("Go back to training").clicked() {
+                        back_to_train = true;
+                    }
+                    ui.add_space(10.0);
+                    if let Some(distance) = environment.distance_to_goals() {
+                        ui.label(format!("Distance to goals: {:.3}", distance));
+                    }
+                    if environment.won {
+                        ui.add_space(10.0);
+                        ui.label("Won");
+                    }
+                    if back_to_train {
+                        cleanup_visulazation(&mut commands, &visualization_objects);
+                        ui_state.view = View::Train;
+                    }
+                }
             }
-            View::Visualize { environment, .. } => {
-                let mut back_to_train = false;
-                if ui.button("Go back to training").clicked() {
-                    back_to_train = true;
-                }
-                ui.label(format!("Won: {}", environment.won));
-                if let Some(distance) = environment.distance_to_goals() {
-                    ui.label(format!("Distance to goals: {}", distance));
-                }
-                if back_to_train {
-                    cleanup_visulazation(&mut commands, &visualization_objects);
-                    ui_state.view = View::Train;
-                }
-            }
-        }
-    });
+        });
 }
 
 fn update_visualization(
@@ -182,11 +204,42 @@ fn spawn_training_thread(
         let mut rng = thread_rng();
 
         match algorithm {
-            Algorithm::Genetic { number_of_agents } => {
+            Algorithm::Genetic {
+                number_of_agents,
+                repeat_move,
+            } => {
+                let agent_score = |agent: &Vec<Move>| {
+                    let mut environment = PhysicsEnvironment::from_world(&world);
+                    let mut score = f32::INFINITY;
+                    for player_move in agent.iter() {
+                        for _ in 0..repeat_move {
+                            environment.step(*player_move);
+                            score = score.min(environment.distance_to_goals().unwrap());
+
+                            if environment.won {
+                                break;
+                            }
+                        }
+
+                        if environment.won {
+                            break;
+                        }
+                    }
+                    for _ in 0..number_of_steps % repeat_move {
+                        environment.step(Move::default());
+                        score = score.min(environment.distance_to_goals().unwrap());
+
+                        if environment.won {
+                            break;
+                        }
+                    }
+                    score
+                };
+
                 let mut generation = vec![];
                 for _ in 0..number_of_agents {
                     let mut agent = vec![];
-                    for _ in 0..number_of_steps {
+                    for _ in 0..number_of_steps / repeat_move {
                         agent.push(Move {
                             left: rng.gen(),
                             right: rng.gen(),
@@ -194,17 +247,7 @@ fn spawn_training_thread(
                         });
                     }
 
-                    let mut environment = PhysicsEnvironment::from_world(&world);
-                    let mut score = f32::INFINITY;
-                    for player_move in agent.iter() {
-                        environment.step(*player_move);
-                        score = score.min(environment.distance_to_goals().unwrap());
-
-                        if environment.won {
-                            break;
-                        }
-                    }
-                    generation.push((score, agent));
+                    generation.push((agent_score(&agent), agent));
                 }
 
                 loop {
@@ -223,6 +266,7 @@ fn spawn_training_thread(
                             Agent::GeneticAgent {
                                 moves: generation[0].1.clone(),
                                 curr: 0,
+                                repeat_move,
                             },
                         ))
                         .is_err()
@@ -246,23 +290,13 @@ fn spawn_training_thread(
                                 }
                             }
 
-                            let mut environment = PhysicsEnvironment::from_world(&world);
-                            let mut score = f32::INFINITY;
-                            for player_move in agent.iter() {
-                                environment.step(*player_move);
-                                score = score.min(environment.distance_to_goals().unwrap());
-
-                                if environment.won {
-                                    break;
-                                }
-                            }
-                            generation.push((score, agent));
+                            generation.push((agent_score(&agent), agent));
                         }
                     }
 
                     while generation.len() < number_of_agents {
                         let mut agent = vec![];
-                        for _ in 0..number_of_steps {
+                        for _ in 0..number_of_steps / repeat_move {
                             agent.push(Move {
                                 left: rng.gen(),
                                 right: rng.gen(),
@@ -270,17 +304,7 @@ fn spawn_training_thread(
                             });
                         }
 
-                        let mut environment = PhysicsEnvironment::from_world(&world);
-                        let mut score = f32::INFINITY;
-                        for player_move in agent.iter() {
-                            environment.step(*player_move);
-                            score = score.min(environment.distance_to_goals().unwrap());
-
-                            if environment.won {
-                                break;
-                            }
-                        }
-                        generation.push((score, agent));
+                        generation.push((agent_score(&agent), agent));
                     }
                 }
             }
@@ -303,12 +327,17 @@ fn setup_visualization(
         let transform = object_and_transform.transform();
         let rigid_body_handle = environment.add_object(object_and_transform);
         match object {
-            WorldObject::Block { .. } => {
+            WorldObject::Block { fixed } => {
+                let color = if *fixed {
+                    Color::BLACK
+                } else {
+                    Color::DARK_GRAY
+                };
                 let mut block = commands.spawn(MaterialMesh2dBundle {
                     mesh: meshes
                         .add(Mesh::from(bevy::prelude::shape::Quad::new(Vec2::ONE)))
                         .into(),
-                    material: materials.add(ColorMaterial::from(Color::BLACK)),
+                    material: materials.add(ColorMaterial::from(color)),
                     transform,
                     ..default()
                 });
@@ -403,29 +432,42 @@ enum View {
 
 #[derive(PartialEq, Clone)]
 enum Algorithm {
-    Genetic { number_of_agents: usize },
+    Genetic {
+        number_of_agents: usize,
+        repeat_move: usize,
+    },
 }
 
 impl Default for Algorithm {
     fn default() -> Self {
         Algorithm::Genetic {
             number_of_agents: 1000,
+            repeat_move: 10,
         }
     }
 }
 
 #[derive(Clone)]
 enum Agent {
-    GeneticAgent { moves: Vec<Move>, curr: usize },
+    GeneticAgent {
+        moves: Vec<Move>,
+        curr: usize,
+        repeat_move: usize,
+    },
 }
 
 impl Agent {
     fn get_move(&mut self) -> Move {
         match self {
-            Agent::GeneticAgent { moves, curr } => {
-                if *curr < moves.len() {
+            Agent::GeneticAgent {
+                moves,
+                curr,
+                repeat_move,
+            } => {
+                if *curr / *repeat_move < moves.len() {
+                    let player_move = moves[*curr / *repeat_move];
                     *curr += 1;
-                    moves[*curr - 1]
+                    player_move
                 } else {
                     Move::default()
                 }

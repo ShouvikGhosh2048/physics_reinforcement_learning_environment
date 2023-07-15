@@ -26,12 +26,17 @@ fn setup_game(
         let transform = object_and_transform.transform();
         let rigid_body_handle = physics_environment.add_object(object_and_transform);
         match object {
-            WorldObject::Block { .. } => {
+            WorldObject::Block { fixed } => {
+                let color = if *fixed {
+                    Color::BLACK
+                } else {
+                    Color::DARK_GRAY
+                };
                 let mut block = commands.spawn(MaterialMesh2dBundle {
                     mesh: meshes
                         .add(Mesh::from(bevy::prelude::shape::Quad::new(Vec2::ONE)))
                         .into(),
-                    material: materials.add(ColorMaterial::from(Color::BLACK)),
+                    material: materials.add(ColorMaterial::from(color)),
                     transform,
                     ..default()
                 });
@@ -88,14 +93,19 @@ fn game_ui_system(
     mut contexts: EguiContexts,
 ) {
     egui::Window::new("Game").show(contexts.ctx_mut(), |ui| {
-        if ui.button("Back to editor").clicked() {
-            next_state.set(AppState::Editor);
-        }
-        if ui.button("Reset").clicked() {
-            next_state.set(AppState::Game);
-        }
+        ui.horizontal(|ui| {
+            if ui.button("Back to editor").clicked() {
+                next_state.set(AppState::Editor);
+            }
+            ui.add_space(15.0);
+            if ui.button("Reset").clicked() {
+                next_state.set(AppState::Game);
+            }
+        });
+        ui.add_space(5.0);
         ui.label(format!("Steps: {}", game_state.steps));
         if game_state.physics_environment.won {
+            ui.add_space(5.0);
             ui.label("Won!");
         }
     });

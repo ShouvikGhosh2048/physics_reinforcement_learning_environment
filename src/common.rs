@@ -190,7 +190,7 @@ impl PhysicsEnvironment {
                         ((player_translation.x - goal.x).abs() - goal.width / 2.0).max(0.0);
                     let distance_y =
                         ((player_translation.y - goal.y).abs() - goal.height / 2.0).max(0.0);
-                        (distance_x.powi(2) + distance_y.powi(2)).sqrt() / BEVY_TO_PHYSICS_SCALE
+                    (distance_x.powi(2) + distance_y.powi(2)).sqrt() / BEVY_TO_PHYSICS_SCALE
                 })
                 .reduce(f32::min)
         } else {
