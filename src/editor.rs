@@ -114,7 +114,7 @@ impl WorldObject {
 }
 
 struct DragState {
-    initial_point: Vec2,
+    initial_pointer_offset: Vec2,
     initial_translation: Vec2,
 }
 
@@ -344,15 +344,34 @@ struct EditorUiState {
 }
 
 impl EditorUiState {
+    fn clear_selection(
+        &mut self,
+        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
+        commands: &mut Commands,
+    ) {
+        if let Some(selected_state) = self.selected.take() {
+            selected_state.clear_selection(objects, commands);
+        }
+    }
+
     fn create_and_select(
         &mut self,
         world_object: WorldObject,
         position: Vec2,
-        selection_z_index: f32,
+        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
         commands: &mut Commands,
         meshes: &mut ResMut<Assets<Mesh>>,
         materials: &mut ResMut<Assets<ColorMaterial>>,
     ) {
+        self.clear_selection(objects, commands);
+
+        let selection_z_index = objects
+            .iter()
+            .map(|(_, _, transform)| transform.translation.z)
+            .reduce(f32::max)
+            .unwrap()
+            + 1.0; // We can unwrap as player will always be there.
+
         let transform = match world_object {
             WorldObject::Block { .. } | WorldObject::Goal => {
                 Transform::from_xyz(position.x, position.y, selection_z_index)
@@ -380,19 +399,28 @@ impl EditorUiState {
 
     fn select<'a>(
         &'a mut self,
-        world_object: &WorldObject,
         entity: Entity,
-        transform: &mut Transform,
-        selection_z_index: f32,
+        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
         commands: &mut Commands,
         meshes: &mut ResMut<Assets<Mesh>>,
         materials: &mut ResMut<Assets<ColorMaterial>>,
     ) -> &'a mut SelectedState {
+        self.clear_selection(objects, commands);
+
+        let selection_z_index = objects
+            .iter()
+            .map(|(_, _, transform)| transform.translation.z)
+            .reduce(f32::max)
+            .unwrap()
+            + 1.0; // We can unwrap as player will always be there.
+
+        let (_, world_object, mut transform) = objects.get_mut(entity).unwrap();
+
         self.selected = Some(SelectedState {
             entity,
             anchors: self.create_anchors(
-                world_object,
-                transform,
+                &world_object,
+                &transform,
                 selection_z_index,
                 commands,
                 meshes,
@@ -468,6 +496,100 @@ impl EditorUiState {
             WorldObject::Player => Anchors::None,
         }
     }
+
+    fn drag_start(
+        &mut self,
+        pointer_position: Vec2,
+        pointer_offset_from_center: Vec2,
+        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
+        anchors: &mut Query<
+            (Entity, &mut Transform),
+            (With<Anchor>, Without<WorldObject>, Without<Camera>),
+        >,
+        camera_transform: &Transform,
+        commands: &mut Commands,
+        meshes: &mut ResMut<Assets<Mesh>>,
+        materials: &mut ResMut<Assets<ColorMaterial>>,
+    ) {
+        // First check selected.
+        if let Some(selected_state) = &mut self.selected {
+            if selected_state.can_drag(pointer_position, objects, anchors) {
+                let initial_translation =
+                    selected_state.drag_start(pointer_position, objects, false);
+                self.drag = Some(DragState {
+                    initial_pointer_offset: pointer_offset_from_center,
+                    initial_translation,
+                });
+                return;
+            } else {
+                self.clear_selection(objects, commands);
+            }
+        }
+
+        let mut drag_entity = None;
+        let mut max_drag_z_index: Option<f32> = None;
+
+        for (entity, object, transform) in objects.iter() {
+            if let Some(max_drag_z_index) = max_drag_z_index {
+                if transform.translation.z <= max_drag_z_index {
+                    continue;
+                }
+            }
+
+            if object.can_drag(transform, pointer_position) {
+                max_drag_z_index = Some(transform.translation.z);
+                drag_entity = Some(entity);
+            }
+        }
+
+        if let Some(drag_entity) = drag_entity {
+            let selected_state = self.select(drag_entity, objects, commands, meshes, materials);
+            let initial_translation = selected_state.drag_start(pointer_position, objects, true);
+            self.drag = Some(DragState {
+                initial_pointer_offset: pointer_offset_from_center,
+                initial_translation,
+            });
+        } else {
+            self.drag = Some(DragState {
+                initial_pointer_offset: pointer_offset_from_center,
+                initial_translation: camera_transform.translation.truncate(),
+            });
+        }
+    }
+
+    fn on_drag(
+        &mut self,
+        pointer_offset_from_center: Vec2,
+        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
+        anchors: &mut Query<
+            (Entity, &mut Transform),
+            (With<Anchor>, Without<WorldObject>, Without<Camera>),
+        >,
+        camera_transform: &mut Transform,
+    ) {
+        if let Some(DragState {
+            initial_pointer_offset,
+            initial_translation,
+        }) = self.drag
+        {
+            if let Some(selected_state) = &mut self.selected {
+                let new_position =
+                    initial_translation + pointer_offset_from_center - initial_pointer_offset;
+                selected_state.drag(objects, anchors, new_position);
+            } else {
+                // Camera will dragged in the opposite direction,
+                // this makes it appear as if the world is dragged in the correct direction.
+                let new_position =
+                    initial_translation - (pointer_offset_from_center - initial_pointer_offset);
+                camera_transform.translation.x = new_position.x;
+                camera_transform.translation.y = new_position.y;
+            }
+        }
+    }
+
+    fn drag_end(&mut self) {
+        self.drag = None;
+    }
 }
 
 fn setup_editor(
@@ -506,9 +628,7 @@ fn cleanup_editor(
     mut objects: Query<(Entity, &mut WorldObject, &mut Transform)>,
     anchors: Query<Entity, (With<Anchor>, Without<WorldObject>)>,
 ) {
-    if let Some(selected_state) = ui_state.selected.take() {
-        selected_state.clear_selection(&mut objects, &mut commands);
-    }
+    ui_state.clear_selection(&mut objects, &mut commands);
 
     for anchor in anchors.iter() {
         commands.entity(anchor).despawn();
@@ -533,7 +653,7 @@ fn load_world(
         (Entity, &mut Transform),
         (With<Anchor>, Without<WorldObject>, Without<Camera>),
     >,
-    camera: &mut Query<&mut Transform, (With<Camera>, Without<WorldObject>)>,
+    camera: &mut Transform,
     ui_state: &mut ResMut<EditorUiState>,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
@@ -561,9 +681,8 @@ fn load_world(
             .clone()
             .create_entity(transform, commands, meshes, materials);
     }
-    let mut camera_transform = camera.iter_mut().next().unwrap();
-    camera_transform.translation.x = 0.0;
-    camera_transform.translation.y = 0.0;
+    camera.translation.x = 0.0;
+    camera.translation.y = 0.0;
     **ui_state = EditorUiState::default();
 }
 
@@ -584,16 +703,16 @@ fn editor_ui_system(
         (With<Anchor>, Without<WorldObject>, Without<Camera>),
     >,
 ) {
-    let camera_translation = camera.iter_mut().next().unwrap().translation.truncate();
+    let mut camera_transform = camera.iter_mut().next().unwrap();
 
     let response = egui::Window::new("World editor")
         .scroll2([false, true])
         .show(contexts.ctx_mut(), |ui| {
-            let mut change_state = None;
+            let mut new_state = None;
 
             ui.horizontal(|ui| {
                 if ui.button("Play world").clicked() {
-                    change_state = Some(AppState::Game);
+                    new_state = Some(AppState::Game);
                 }
 
                 let has_goal = objects
@@ -601,11 +720,11 @@ fn editor_ui_system(
                     .any(|(_, object, _)| matches!(object, WorldObject::Goal));
 
                 if has_goal && ui.button("Train agent on world").clicked() {
-                    change_state = Some(AppState::Train);
+                    new_state = Some(AppState::Train);
                 }
             });
 
-            if let Some(state) = change_state {
+            if let Some(state) = new_state {
                 next_state.set(state);
                 return;
             }
@@ -615,24 +734,33 @@ fn editor_ui_system(
             ui.horizontal(|ui| {
                 if ui.button("Open").clicked() {
                     if let Some(path) = rfd::FileDialog::new().pick_file() {
-                        let new_world: Result<World, _> =
-                            serde_json::from_str(&fs::read_to_string(path).unwrap());
-                        if let Ok(new_world) = new_world {
-                            // TODO: Add a check for player in the world.
-                            *world = new_world;
-                            load_world(
-                                &world,
-                                &mut commands,
-                                &objects,
-                                &anchors,
-                                &mut camera,
-                                &mut ui_state,
-                                &mut meshes,
-                                &mut materials,
-                            );
+                        let new_world: Option<World> = fs::read_to_string(path)
+                            .ok()
+                            .and_then(|s| serde_json::from_str(&s).ok());
+
+                        if let Some(new_world) = new_world {
+                            let has_player = new_world
+                                .objects
+                                .iter()
+                                .any(|object| matches!(object.object, WorldObject::Player));
+
+                            if has_player {
+                                *world = new_world;
+                                load_world(
+                                    &world,
+                                    &mut commands,
+                                    &objects,
+                                    &anchors,
+                                    &mut camera_transform,
+                                    &mut ui_state,
+                                    &mut meshes,
+                                    &mut materials,
+                                );
+                            }
                         }
                     }
                 }
+
                 if ui.button("Save").clicked() {
                     if let Some(path) = rfd::FileDialog::new().save_file() {
                         let objects = objects
@@ -644,8 +772,10 @@ fn editor_ui_system(
                             })
                             .collect();
                         let world = World { objects };
-                        // TODO: Write may fail - remove the unwrap.
-                        fs::write(path, serde_json::to_string(&world).unwrap()).unwrap();
+                        if fs::write(path, serde_json::to_string(&world).unwrap()).is_err() {
+                            // TODO: Show error in the UI.
+                            println!("Couldn't save the world.");
+                        }
                     }
                 }
             });
@@ -653,87 +783,86 @@ fn editor_ui_system(
             ui.add_space(10.0);
 
             if let Some(selected) = &mut ui_state.selected {
-                if let Ok((_, mut object, mut transform)) = objects.get_mut(selected.entity) {
-                    let clear_selection = ui.button("Back").clicked();
-                    ui.add_space(10.0);
-                    match &mut *object {
-                        WorldObject::Player => {
-                            ui.label("Player");
-                            egui::Grid::new("Player grid")
-                                .spacing([25.0, 5.0])
-                                .show(ui, |ui| {
-                                    ui.label("Transform:");
-                                    ui.horizontal(|ui| {
-                                        ui.add(DragValue::new(&mut transform.translation.x));
-                                        ui.add(DragValue::new(&mut transform.translation.y));
-                                    });
-                                    ui.end_row();
-                                });
-                        }
-                        WorldObject::Block { fixed } => {
-                            let prev_fixed = *fixed;
-                            ui.label("Block");
-                            egui::Grid::new("Block grid")
-                                .spacing([25.0, 5.0])
-                                .show(ui, |ui| {
-                                    ui.label("Transform:");
-                                    ui.horizontal(|ui| {
-                                        ui.add(DragValue::new(&mut transform.translation.x));
-                                        ui.add(DragValue::new(&mut transform.translation.y));
-                                    });
-                                    ui.end_row();
+                let (_, mut object, mut transform) = objects.get_mut(selected.entity).unwrap();
 
-                                    ui.label("Scale:");
-                                    ui.horizontal(|ui| {
-                                        ui.add(DragValue::new(&mut transform.scale.x));
-                                        ui.add(DragValue::new(&mut transform.scale.y));
-                                    });
-                                    ui.end_row();
+                if ui.button("Back").clicked() {
+                    ui_state.clear_selection(&mut objects, &mut commands);
+                    return;
+                }
 
-                                    ui.label("Fixed");
-                                    ui.checkbox(fixed, "");
-                                    ui.end_row();
-                                });
-                            selected.anchors.update_transform(&transform, &mut anchors);
-                            if *fixed != prev_fixed {
-                                let mut selected_material =
-                                    current_materials.get_mut(selected.entity).unwrap();
-                                let color = if *fixed {
-                                    Color::BLACK
-                                } else {
-                                    Color::DARK_GRAY
-                                };
-                                *selected_material = materials.add(ColorMaterial::from(color));
-                            }
-                        }
-                        WorldObject::Goal => {
-                            ui.label("Goal");
-                            egui::Grid::new("Goal grid")
-                                .spacing([25.0, 5.0])
-                                .show(ui, |ui| {
-                                    ui.label("Transform:");
-                                    ui.horizontal(|ui| {
-                                        ui.add(DragValue::new(&mut transform.translation.x));
-                                        ui.add(DragValue::new(&mut transform.translation.y));
-                                    });
-                                    ui.end_row();
+                ui.add_space(10.0);
 
-                                    ui.label("Scale:");
-                                    ui.horizontal(|ui| {
-                                        ui.add(DragValue::new(&mut transform.scale.x));
-                                        ui.add(DragValue::new(&mut transform.scale.y));
-                                    });
-                                    ui.end_row();
+                match &mut *object {
+                    WorldObject::Player => {
+                        ui.label("Player");
+                        egui::Grid::new("Player grid")
+                            .spacing([25.0, 5.0])
+                            .show(ui, |ui| {
+                                ui.label("Transform:");
+                                ui.horizontal(|ui| {
+                                    ui.add(DragValue::new(&mut transform.translation.x));
+                                    ui.add(DragValue::new(&mut transform.translation.y));
                                 });
-                            selected.anchors.update_transform(&transform, &mut anchors);
+                                ui.end_row();
+                            });
+                    }
+                    WorldObject::Block { fixed } => {
+                        let prev_fixed = *fixed;
+                        ui.label("Block");
+                        egui::Grid::new("Block grid")
+                            .spacing([25.0, 5.0])
+                            .show(ui, |ui| {
+                                ui.label("Transform:");
+                                ui.horizontal(|ui| {
+                                    ui.add(DragValue::new(&mut transform.translation.x));
+                                    ui.add(DragValue::new(&mut transform.translation.y));
+                                });
+                                ui.end_row();
+
+                                ui.label("Scale:");
+                                ui.horizontal(|ui| {
+                                    ui.add(DragValue::new(&mut transform.scale.x));
+                                    ui.add(DragValue::new(&mut transform.scale.y));
+                                });
+                                ui.end_row();
+
+                                ui.label("Fixed");
+                                ui.checkbox(fixed, "");
+                                ui.end_row();
+                            });
+                        selected.anchors.update_transform(&transform, &mut anchors);
+
+                        if *fixed != prev_fixed {
+                            let mut selected_material =
+                                current_materials.get_mut(selected.entity).unwrap();
+                            let color = if *fixed {
+                                Color::BLACK
+                            } else {
+                                Color::DARK_GRAY
+                            };
+                            *selected_material = materials.add(ColorMaterial::from(color));
                         }
                     }
-                    if clear_selection {
-                        ui_state
-                            .selected
-                            .take()
-                            .unwrap()
-                            .clear_selection(&mut objects, &mut commands);
+                    WorldObject::Goal => {
+                        ui.label("Goal");
+                        egui::Grid::new("Goal grid")
+                            .spacing([25.0, 5.0])
+                            .show(ui, |ui| {
+                                ui.label("Transform:");
+                                ui.horizontal(|ui| {
+                                    ui.add(DragValue::new(&mut transform.translation.x));
+                                    ui.add(DragValue::new(&mut transform.translation.y));
+                                });
+                                ui.end_row();
+
+                                ui.label("Scale:");
+                                ui.horizontal(|ui| {
+                                    ui.add(DragValue::new(&mut transform.scale.x));
+                                    ui.add(DragValue::new(&mut transform.scale.y));
+                                });
+                                ui.end_row();
+                            });
+                        selected.anchors.update_transform(&transform, &mut anchors);
                     }
                 }
             } else {
@@ -744,21 +873,10 @@ fn editor_ui_system(
                     ];
                     for (name, object) in new_objects {
                         if ui.button(format!("New {name}")).clicked() {
-                            if let Some(selected_state) = ui_state.selected.take() {
-                                selected_state.clear_selection(&mut objects, &mut commands);
-                            }
-
-                            let selection_z_index = objects
-                                .iter()
-                                .map(|(_, _, transform)| transform.translation.z)
-                                .reduce(f32::max)
-                                .unwrap()
-                                + 1.0; // We can unwrap as player will always be there.
-
                             ui_state.create_and_select(
                                 object,
-                                camera_translation,
-                                selection_z_index,
+                                camera_transform.translation.truncate(),
+                                &mut objects,
                                 &mut commands,
                                 &mut meshes,
                                 &mut materials,
@@ -770,64 +888,41 @@ fn editor_ui_system(
                 ui.add_space(10.0);
 
                 ui.label("Objects:");
-                let selection_z_index = objects
-                    .iter()
-                    .map(|(_, _, transform)| transform.translation.z)
-                    .reduce(f32::max)
-                    .unwrap()
-                    + 1.0;
-
-                let mut camera_transform = camera.iter_mut().next().unwrap();
 
                 egui::Grid::new("Object grid")
                     .spacing([50.0, 5.0])
                     .show(ui, |ui| {
-                        for (entity, object, mut transform) in objects.iter_mut() {
+                        for (entity, object, transform) in objects.iter_mut() {
                             let name = match *object {
                                 WorldObject::Player => "Player",
                                 WorldObject::Block { .. } => "Block",
                                 WorldObject::Goal => "Goal",
                             };
-                            match *object {
-                                WorldObject::Player => {
-                                    if ui.button("Player").clicked() {
-                                        ui_state.select(
-                                            &object,
-                                            entity,
-                                            &mut transform,
-                                            selection_z_index,
-                                            &mut commands,
-                                            &mut meshes,
-                                            &mut materials,
-                                        );
-                                        camera_transform.translation.x = transform.translation.x;
-                                        camera_transform.translation.y = transform.translation.y;
-                                    }
-                                }
-                                WorldObject::Block { .. } | WorldObject::Goal => {
-                                    if ui.button(name).clicked() {
-                                        ui_state.select(
-                                            &object,
-                                            entity,
-                                            &mut transform,
-                                            selection_z_index,
-                                            &mut commands,
-                                            &mut meshes,
-                                            &mut materials,
-                                        );
-                                        camera_transform.translation.x = transform.translation.x;
-                                        camera_transform.translation.y = transform.translation.y;
-                                    }
-                                    if ui.button("Delete").clicked() {
-                                        commands.entity(entity).despawn();
-                                    }
-                                }
-                            };
+                            if ui.button(name).clicked() {
+                                camera_transform.translation.x = transform.translation.x;
+                                camera_transform.translation.y = transform.translation.y;
+                                ui_state.select(
+                                    entity,
+                                    &mut objects,
+                                    &mut commands,
+                                    &mut meshes,
+                                    &mut materials,
+                                );
+                                return;
+                            }
+
+                            if !matches!(&*object, WorldObject::Player)
+                                && ui.button("Delete").clicked()
+                            {
+                                commands.entity(entity).despawn();
+                                return;
+                            }
                             ui.end_row();
                         }
                     });
             }
         });
+
     let response = if let Some(response) = response {
         response.response
     } else {
@@ -839,6 +934,7 @@ fn editor_ui_system(
     } else {
         return;
     };
+
     let pointer_on_egui = response.rect.contains(pointer_position);
 
     let screen_rect = contexts.ctx_mut().screen_rect();
@@ -846,110 +942,35 @@ fn editor_ui_system(
     let mut pointer_offset_from_center =
         Vec2::new(pointer_offset_from_center.x, pointer_offset_from_center.y);
     pointer_offset_from_center.y *= -1.0; // Bevy's and EGUI's +y-axis have different directions.
-    let pointer_position = camera_translation + pointer_offset_from_center;
-
-    let mut camera_transform = camera.iter_mut().next().unwrap();
+    let pointer_position = camera_transform.translation.truncate() + pointer_offset_from_center;
 
     if mouse_button_input.just_pressed(MouseButton::Left) {
         if !pointer_on_egui {
-            // First check selected.
-            if let Some(selected_state) = &mut ui_state.selected {
-                if selected_state.can_drag(pointer_position, &mut objects, &mut anchors) {
-                    let initial_translation =
-                        selected_state.drag_start(pointer_position, &mut objects, false);
-                    ui_state.drag = Some(DragState {
-                        initial_point: pointer_offset_from_center,
-                        initial_translation,
-                    });
-                    return;
-                } else {
-                    ui_state
-                        .selected
-                        .take()
-                        .unwrap()
-                        .clear_selection(&mut objects, &mut commands);
-                }
-            }
-
-            let max_z_index = objects
-                .iter()
-                .map(|(_, _, transform)| transform.translation.z)
-                .reduce(f32::max);
-
-            let mut drag_entity = None;
-            let mut max_drag_z_index: Option<f32> = None;
-
-            for (entity, object, transform) in objects.iter() {
-                if let Some(max_drag_z_index) = max_drag_z_index {
-                    if transform.translation.z <= max_drag_z_index {
-                        continue;
-                    }
-                }
-
-                if object.can_drag(transform, pointer_position) {
-                    max_drag_z_index = Some(transform.translation.z);
-                    drag_entity = Some(entity);
-                }
-            }
-
-            if let Some(drag_entity) = drag_entity {
-                let (_, object, mut transform) = objects.get_mut(drag_entity).unwrap();
-
-                let selection_z_index = max_z_index.unwrap() + 1.0;
-                let selected_state = ui_state.select(
-                    &object,
-                    drag_entity,
-                    &mut transform,
-                    selection_z_index,
-                    &mut commands,
-                    &mut meshes,
-                    &mut materials,
-                );
-                let initial_translation =
-                    selected_state.drag_start(pointer_position, &mut objects, true);
-                ui_state.drag = Some(DragState {
-                    initial_point: pointer_offset_from_center,
-                    initial_translation,
-                });
-            } else {
-                ui_state.drag = Some(DragState {
-                    initial_point: pointer_offset_from_center,
-                    initial_translation: camera_translation,
-                });
-            }
+            ui_state.drag_start(
+                pointer_position,
+                pointer_offset_from_center,
+                &mut objects,
+                &mut anchors,
+                &camera_transform,
+                &mut commands,
+                &mut meshes,
+                &mut materials,
+            );
         }
     } else if mouse_button_input.pressed(MouseButton::Left) {
-        if let Some(DragState {
-            initial_point,
-            initial_translation,
-        }) = ui_state.drag
-        {
-            if let Some(selected_state) = &mut ui_state.selected {
-                let new_position = initial_translation + pointer_offset_from_center - initial_point;
-                selected_state.drag(&mut objects, &mut anchors, new_position);
-            } else {
-                let new_position =
-                    initial_translation - (pointer_offset_from_center - initial_point);
-                camera_transform.translation.x = new_position.x;
-                camera_transform.translation.y = new_position.y;
-            }
-        }
+        ui_state.on_drag(
+            pointer_offset_from_center,
+            &mut objects,
+            &mut anchors,
+            &mut camera_transform,
+        );
     } else if mouse_button_input.just_released(MouseButton::Left) {
-        if let Some(DragState {
-            initial_point,
-            initial_translation,
-        }) = ui_state.drag
-        {
-            if let Some(selected_state) = &mut ui_state.selected {
-                let new_position = initial_translation + pointer_offset_from_center - initial_point;
-                selected_state.drag(&mut objects, &mut anchors, new_position);
-            } else {
-                let new_position =
-                    initial_translation - (pointer_offset_from_center - initial_point);
-                camera_transform.translation.x = new_position.x;
-                camera_transform.translation.y = new_position.y;
-            }
-            ui_state.drag = None;
-        }
+        ui_state.on_drag(
+            pointer_offset_from_center,
+            &mut objects,
+            &mut anchors,
+            &mut camera_transform,
+        );
+        ui_state.drag_end();
     }
 }
