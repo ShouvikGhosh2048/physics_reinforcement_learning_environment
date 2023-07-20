@@ -2,7 +2,7 @@ use crate::common::{
     AppState, ObjectAndTransform, World, WorldObject, PLAYER_DEPTH, PLAYER_RADIUS,
 };
 
-use bevy::{prelude::*, sprite::MaterialMesh2dBundle};
+use bevy::{input::mouse::MouseWheel, prelude::*, sprite::MaterialMesh2dBundle};
 use bevy_egui::{
     egui::{self, DragValue},
     EguiContexts,
@@ -28,6 +28,7 @@ enum TransformEditor {
 
 fn create_anchor(
     position: Vec3,
+    camera_scale: f32,
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
@@ -36,7 +37,11 @@ fn create_anchor(
         .spawn(MaterialMesh2dBundle {
             mesh: meshes.add(shape::Circle::new(ANCHOR_RADIUS).into()).into(),
             material: materials.add(ColorMaterial::from(Color::RED)),
-            transform: Transform::from_translation(position),
+            transform: Transform::from_translation(position).with_scale(Vec3::new(
+                camera_scale,
+                camera_scale,
+                1.0,
+            )),
             ..default()
         })
         .insert(TransformEditor::Anchor)
@@ -45,6 +50,7 @@ fn create_anchor(
 
 fn create_ring(
     position: (f32, f32, f32),
+    camera_scale: f32,
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
@@ -64,6 +70,7 @@ fn create_ring(
                 .into(),
             material: materials.add(ColorMaterial::from(Color::TEAL)),
             transform: Transform::from_xyz(position.0, position.1, position.2)
+                .with_scale(Vec3::new(camera_scale, 1.0, camera_scale))
                 .with_rotation(Quat::from_rotation_x(PI / 2.0)),
             ..default()
         })
@@ -179,7 +186,7 @@ enum TransformEditors {
 }
 
 impl TransformEditors {
-    fn despawn_anchors(self, commands: &mut Commands) {
+    fn despawn_transform_editors(self, commands: &mut Commands) {
         match self {
             TransformEditors::Rect {
                 left,
@@ -202,7 +209,7 @@ impl TransformEditors {
     fn update_transform(
         &self,
         entity_transform: &Transform,
-        anchors: &mut Query<
+        transform_editors: &mut Query<
             (Entity, &mut Transform, &TransformEditor),
             (Without<WorldObject>, Without<Camera>),
         >,
@@ -221,18 +228,18 @@ impl TransformEditors {
                 let x_axis = (entity_transform.rotation * Vec3::X).truncate();
                 let y_axis = (entity_transform.rotation * Vec3::Y).truncate();
                 let z_index = entity_transform.translation.z;
-                let (_, mut rotation_transform, _) = anchors.get_mut(*rotation).unwrap();
+                let (_, mut rotation_transform, _) = transform_editors.get_mut(*rotation).unwrap();
                 rotation_transform.translation = translation.extend(z_index + 1.0);
-                let (_, mut left_transform, _) = anchors.get_mut(*left).unwrap();
+                let (_, mut left_transform, _) = transform_editors.get_mut(*left).unwrap();
                 left_transform.translation =
                     (translation - x_axis * size.x / 2.0).extend(z_index + 2.0);
-                let (_, mut right_transform, _) = anchors.get_mut(*right).unwrap();
+                let (_, mut right_transform, _) = transform_editors.get_mut(*right).unwrap();
                 right_transform.translation =
                     (translation + x_axis * size.x / 2.0).extend(z_index + 2.0);
-                let (_, mut top_transform, _) = anchors.get_mut(*top).unwrap();
+                let (_, mut top_transform, _) = transform_editors.get_mut(*top).unwrap();
                 top_transform.translation =
                     (translation + y_axis * size.y / 2.0).extend(z_index + 2.0);
-                let (_, mut bottom_transform, _) = anchors.get_mut(*bottom).unwrap();
+                let (_, mut bottom_transform, _) = transform_editors.get_mut(*bottom).unwrap();
                 bottom_transform.translation =
                     (translation - y_axis * size.y / 2.0).extend(z_index + 2.0);
             }
@@ -243,7 +250,7 @@ impl TransformEditors {
 
 struct SelectedState {
     entity: Entity,
-    anchors: TransformEditors,
+    transform_editors: TransformEditors,
     prev_z_index: f32,
 }
 
@@ -252,23 +259,23 @@ impl SelectedState {
         &self,
         pointer_position: Vec2,
         objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
-        anchors: &mut Query<
+        transform_editors: &mut Query<
             (Entity, &mut Transform, &TransformEditor),
             (Without<WorldObject>, Without<Camera>),
         >,
     ) -> bool {
-        for (_, transform, transform_editor) in anchors {
+        for (_, transform, transform_editor) in transform_editors {
             let distance_from_center =
                 (transform.translation.truncate() - pointer_position).length();
             match transform_editor {
                 TransformEditor::Anchor => {
-                    if distance_from_center < ANCHOR_RADIUS {
+                    if distance_from_center < ANCHOR_RADIUS * transform.scale.x {
                         return true;
                     }
                 }
                 TransformEditor::Ring => {
-                    if RING_INNER_RADIUS < distance_from_center
-                        && distance_from_center < RING_OUTER_RADIUS
+                    if RING_INNER_RADIUS * transform.scale.x < distance_from_center
+                        && distance_from_center < RING_OUTER_RADIUS * transform.scale.x
                     {
                         return true;
                     }
@@ -287,16 +294,17 @@ impl SelectedState {
         // TODO: Handle deletion of selected entity?
         let (_, _, mut transform) = objects.get_mut(self.entity).unwrap();
         transform.translation.z = self.prev_z_index;
-        self.anchors.despawn_anchors(commands);
+        self.transform_editors.despawn_transform_editors(commands);
     }
 
     fn drag_start(
         &mut self,
         pointer_position: Vec2,
+        camera_scale: f32,
         objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
         selected_by_drag: bool,
     ) {
-        match &mut self.anchors {
+        match &mut self.transform_editors {
             TransformEditors::Rect { dragging, .. } => {
                 let (_, object, transform) = objects.get(self.entity).unwrap();
 
@@ -308,23 +316,24 @@ impl SelectedState {
                 *dragging = if selected_by_drag {
                     RectDrag::None(transform.translation.truncate())
                 } else if (pointer_position - (translation - x_axis * size.x / 2.0)).length()
-                    < ANCHOR_RADIUS
+                    < ANCHOR_RADIUS * camera_scale
                 {
                     RectDrag::Left(translation - x_axis * size.x / 2.0)
                 } else if (pointer_position - (translation + x_axis * size.x / 2.0)).length()
-                    < ANCHOR_RADIUS
+                    < ANCHOR_RADIUS * camera_scale
                 {
                     RectDrag::Right(translation + x_axis * size.x / 2.0)
                 } else if (pointer_position - (translation + y_axis * size.y / 2.0)).length()
-                    < ANCHOR_RADIUS
+                    < ANCHOR_RADIUS * camera_scale
                 {
                     RectDrag::Top(translation + y_axis * size.y / 2.0)
                 } else if (pointer_position - (translation - y_axis * size.y / 2.0)).length()
-                    < ANCHOR_RADIUS
+                    < ANCHOR_RADIUS * camera_scale
                 {
                     RectDrag::Bottom(translation - y_axis * size.y / 2.0)
-                } else if RING_INNER_RADIUS < (translation - pointer_position).length()
-                    && (translation - pointer_position).length() < RING_OUTER_RADIUS
+                } else if RING_INNER_RADIUS * camera_scale
+                    < (translation - pointer_position).length()
+                    && (translation - pointer_position).length() < RING_OUTER_RADIUS * camera_scale
                 {
                     RectDrag::Rotation(transform.rotation.to_euler(EulerRot::XYZ).2)
                 } else if object.can_drag(transform, pointer_position) {
@@ -345,14 +354,14 @@ impl SelectedState {
     fn drag(
         &mut self,
         objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
-        anchors: &mut Query<
+        transform_editors: &mut Query<
             (Entity, &mut Transform, &TransformEditor),
             (Without<WorldObject>, Without<Camera>),
         >,
         initial_pointer_position: Vec2,
         pointer_position: Vec2,
     ) {
-        match &self.anchors {
+        match &self.transform_editors {
             TransformEditors::Rect { dragging, .. } => {
                 let (_, _, mut rect_transform) = objects.get_mut(self.entity).unwrap();
 
@@ -435,7 +444,8 @@ impl SelectedState {
                     }
                 }
 
-                self.anchors.update_transform(&rect_transform, anchors);
+                self.transform_editors
+                    .update_transform(&rect_transform, transform_editors);
             }
             TransformEditors::None {
                 initial_translation,
@@ -471,6 +481,7 @@ impl EditorUiState {
         &mut self,
         world_object: WorldObject,
         position: Vec2,
+        camera_scale: f32,
         objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
         commands: &mut Commands,
         meshes: &mut ResMut<Assets<Mesh>>,
@@ -498,9 +509,10 @@ impl EditorUiState {
 
         self.selected = Some(SelectedState {
             entity,
-            anchors: self.create_anchors(
+            transform_editors: self.create_transform_editors(
                 &world_object,
                 &transform,
+                camera_scale,
                 selection_z_index,
                 commands,
                 meshes,
@@ -513,6 +525,7 @@ impl EditorUiState {
     fn select<'a>(
         &'a mut self,
         entity: Entity,
+        camera_scale: f32,
         objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
         commands: &mut Commands,
         meshes: &mut ResMut<Assets<Mesh>>,
@@ -531,9 +544,10 @@ impl EditorUiState {
 
         self.selected = Some(SelectedState {
             entity,
-            anchors: self.create_anchors(
+            transform_editors: self.create_transform_editors(
                 &world_object,
                 &transform,
+                camera_scale,
                 selection_z_index,
                 commands,
                 meshes,
@@ -545,10 +559,11 @@ impl EditorUiState {
         self.selected.as_mut().unwrap()
     }
 
-    fn create_anchors(
+    fn create_transform_editors(
         &self,
         world_object: &WorldObject,
         transform: &Transform,
+        camera_scale: f32,
         selection_z_index: f32,
         commands: &mut Commands,
         meshes: &mut ResMut<Assets<Mesh>>,
@@ -562,30 +577,35 @@ impl EditorUiState {
                 let y_axis = (transform.rotation * Vec3::Y).truncate();
                 let rotation = create_ring(
                     (translation.x, translation.y, selection_z_index + 1.0),
+                    camera_scale,
                     commands,
                     meshes,
                     materials,
                 );
                 let left = create_anchor(
                     (translation - x_axis * size.x / 2.0).extend(selection_z_index + 2.0),
+                    camera_scale,
                     commands,
                     meshes,
                     materials,
                 );
                 let right = create_anchor(
                     (translation + x_axis * size.x / 2.0).extend(selection_z_index + 2.0),
+                    camera_scale,
                     commands,
                     meshes,
                     materials,
                 );
                 let top = create_anchor(
                     (translation + y_axis * size.y / 2.0).extend(selection_z_index + 2.0),
+                    camera_scale,
                     commands,
                     meshes,
                     materials,
                 );
                 let bottom = create_anchor(
                     (translation - y_axis * size.y / 2.0).extend(selection_z_index + 2.0),
+                    camera_scale,
                     commands,
                     meshes,
                     materials,
@@ -610,7 +630,7 @@ impl EditorUiState {
         pointer_position: Vec2,
         pointer_offset_from_center: Vec2,
         objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
-        anchors: &mut Query<
+        transform_editors: &mut Query<
             (Entity, &mut Transform, &TransformEditor),
             (Without<WorldObject>, Without<Camera>),
         >,
@@ -621,8 +641,13 @@ impl EditorUiState {
     ) {
         // First check selected.
         if let Some(selected_state) = &mut self.selected {
-            if selected_state.can_drag(pointer_position, objects, anchors) {
-                selected_state.drag_start(pointer_position, objects, false);
+            if selected_state.can_drag(pointer_position, objects, transform_editors) {
+                selected_state.drag_start(
+                    pointer_position,
+                    camera_transform.scale.x,
+                    objects,
+                    false,
+                );
                 self.drag = Some(DragState {
                     initial_pointer_offset: pointer_offset_from_center,
                     initial_camera_translation: camera_transform.translation.truncate(),
@@ -650,8 +675,15 @@ impl EditorUiState {
         }
 
         if let Some(drag_entity) = drag_entity {
-            let selected_state = self.select(drag_entity, objects, commands, meshes, materials);
-            selected_state.drag_start(pointer_position, objects, true);
+            let selected_state = self.select(
+                drag_entity,
+                camera_transform.scale.x,
+                objects,
+                commands,
+                meshes,
+                materials,
+            );
+            selected_state.drag_start(pointer_position, camera_transform.scale.x, objects, true);
             self.drag = Some(DragState {
                 initial_pointer_offset: pointer_offset_from_center,
                 initial_camera_translation: camera_transform.translation.truncate(),
@@ -668,7 +700,7 @@ impl EditorUiState {
         &mut self,
         pointer_offset_from_center: Vec2,
         objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
-        anchors: &mut Query<
+        transform_editors: &mut Query<
             (Entity, &mut Transform, &TransformEditor),
             (Without<WorldObject>, Without<Camera>),
         >,
@@ -682,7 +714,7 @@ impl EditorUiState {
             if let Some(selected_state) = &mut self.selected {
                 selected_state.drag(
                     objects,
-                    anchors,
+                    transform_editors,
                     initial_camera_translation + initial_pointer_offset,
                     initial_camera_translation + pointer_offset_from_center,
                 );
@@ -729,12 +761,13 @@ fn cleanup_editor(
     mut world: ResMut<World>,
     mut ui_state: ResMut<EditorUiState>,
     mut objects: Query<(Entity, &mut WorldObject, &mut Transform)>,
-    anchors: Query<Entity, (With<TransformEditor>, Without<WorldObject>)>,
+    transform_editors: Query<Entity, (With<TransformEditor>, Without<WorldObject>)>,
+    mut camera: Query<&mut Transform, (With<Camera>, Without<WorldObject>)>,
 ) {
     ui_state.clear_selection(&mut objects, &mut commands);
 
-    for anchor in anchors.iter() {
-        commands.entity(anchor).despawn();
+    for transform_editor in transform_editors.iter() {
+        commands.entity(transform_editor).despawn();
     }
 
     world.objects.clear();
@@ -747,13 +780,17 @@ fn cleanup_editor(
         });
         commands.entity(entity).despawn();
     }
+
+    let mut camera_transform = camera.iter_mut().next().unwrap();
+    camera_transform.scale.x = 1.0;
+    camera_transform.scale.y = 1.0;
 }
 
 fn load_world(
     world: &ResMut<World>,
     commands: &mut Commands,
     objects: &Query<(Entity, &mut WorldObject, &mut Transform)>,
-    anchors: &Query<
+    transform_editors: &Query<
         (Entity, &mut Transform, &TransformEditor),
         (Without<WorldObject>, Without<Camera>),
     >,
@@ -762,8 +799,8 @@ fn load_world(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
 ) {
-    for (anchor, _, _) in anchors.iter() {
-        commands.entity(anchor).despawn();
+    for (transform_editor, _, _) in transform_editors.iter() {
+        commands.entity(transform_editor).despawn();
     }
 
     for (entity, _, _) in objects.iter() {
@@ -795,10 +832,11 @@ fn editor_ui_system(
     mut current_materials: Query<&mut Handle<ColorMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut anchors: Query<
+    mut transform_editors: Query<
         (Entity, &mut Transform, &TransformEditor),
         (Without<WorldObject>, Without<Camera>),
     >,
+    mut mouse_wheel_events: EventReader<MouseWheel>,
 ) {
     let mut camera_transform = camera.iter_mut().next().unwrap();
 
@@ -847,7 +885,7 @@ fn editor_ui_system(
                                     &world,
                                     &mut commands,
                                     &objects,
-                                    &anchors,
+                                    &transform_editors,
                                     &mut camera_transform,
                                     &mut ui_state,
                                     &mut meshes,
@@ -935,7 +973,9 @@ fn editor_ui_system(
                                 ui.checkbox(fixed, "");
                                 ui.end_row();
                             });
-                        selected.anchors.update_transform(&transform, &mut anchors);
+                        selected
+                            .transform_editors
+                            .update_transform(&transform, &mut transform_editors);
 
                         if *fixed != prev_fixed {
                             let mut selected_material =
@@ -974,7 +1014,9 @@ fn editor_ui_system(
                                 transform.rotation = Quat::from_rotation_z(rotation * PI / 180.0);
                                 ui.end_row();
                             });
-                        selected.anchors.update_transform(&transform, &mut anchors);
+                        selected
+                            .transform_editors
+                            .update_transform(&transform, &mut transform_editors);
                     }
                 }
             } else {
@@ -988,6 +1030,7 @@ fn editor_ui_system(
                             ui_state.create_and_select(
                                 object,
                                 camera_transform.translation.truncate(),
+                                camera_transform.scale.x,
                                 &mut objects,
                                 &mut commands,
                                 &mut meshes,
@@ -1015,6 +1058,7 @@ fn editor_ui_system(
                                 camera_transform.translation.y = transform.translation.y;
                                 ui_state.select(
                                     entity,
+                                    camera_transform.scale.x,
                                     &mut objects,
                                     &mut commands,
                                     &mut meshes,
@@ -1054,6 +1098,7 @@ fn editor_ui_system(
     let mut pointer_offset_from_center =
         Vec2::new(pointer_offset_from_center.x, pointer_offset_from_center.y);
     pointer_offset_from_center.y *= -1.0; // Bevy's and EGUI's +y-axis have different directions.
+    pointer_offset_from_center *= camera_transform.scale.x;
     let pointer_position = camera_transform.translation.truncate() + pointer_offset_from_center;
 
     if mouse_button_input.just_pressed(MouseButton::Left) {
@@ -1062,7 +1107,7 @@ fn editor_ui_system(
                 pointer_position,
                 pointer_offset_from_center,
                 &mut objects,
-                &mut anchors,
+                &mut transform_editors,
                 &camera_transform,
                 &mut commands,
                 &mut meshes,
@@ -1073,16 +1118,43 @@ fn editor_ui_system(
         ui_state.on_drag(
             pointer_offset_from_center,
             &mut objects,
-            &mut anchors,
+            &mut transform_editors,
             &mut camera_transform,
         );
     } else if mouse_button_input.just_released(MouseButton::Left) {
         ui_state.on_drag(
             pointer_offset_from_center,
             &mut objects,
-            &mut anchors,
+            &mut transform_editors,
             &mut camera_transform,
         );
         ui_state.drag_end();
+    }
+
+    if !pointer_on_egui && ui_state.drag.is_none() {
+        for event in mouse_wheel_events.iter() {
+            let scale = camera_transform.scale.x;
+            let new_scale = (scale * 0.9_f32.powf(event.y)).max(0.01);
+            camera_transform.scale.x = new_scale;
+            camera_transform.scale.y = new_scale;
+            for (_, mut transform, transform_editor) in transform_editors.iter_mut() {
+                match transform_editor {
+                    TransformEditor::Anchor => {
+                        transform.scale.x = new_scale;
+                        transform.scale.y = new_scale;
+                    }
+                    TransformEditor::Ring => {
+                        // The torus was initially parallel to the XZ plane, so we scale those directions.
+                        transform.scale.x = new_scale;
+                        transform.scale.z = new_scale;
+                    }
+                }
+            }
+            let new_translation = new_scale
+                * (camera_transform.translation.truncate() / scale
+                    + pointer_position * (1.0 / new_scale - 1.0 / scale));
+            camera_transform.translation.x = new_translation.x;
+            camera_transform.translation.y = new_translation.y;
+        }
     }
 }
