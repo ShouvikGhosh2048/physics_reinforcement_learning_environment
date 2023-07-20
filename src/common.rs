@@ -28,6 +28,7 @@ impl Default for World {
                 object: WorldObject::Player,
                 position: [0.0; 3],
                 scale: [1.0; 3],
+                rotation: 0.0,
             }],
         }
     }
@@ -39,6 +40,7 @@ pub struct ObjectAndTransform {
     pub object: WorldObject,
     pub position: [f32; 3],
     pub scale: [f32; 3],
+    pub rotation: f32,
 }
 
 impl ObjectAndTransform {
@@ -46,7 +48,7 @@ impl ObjectAndTransform {
         Transform {
             translation: Vec3::from_array(self.position),
             scale: Vec3::from_array(self.scale),
-            ..Default::default()
+            rotation: Quat::from_rotation_z(self.rotation),
         }
     }
 }
@@ -101,30 +103,32 @@ impl PhysicsEnvironment {
         object_and_transform: &ObjectAndTransform,
     ) -> Option<RigidBodyHandle> {
         let object = &object_and_transform.object;
-        let transform = object_and_transform.transform();
         match object {
             WorldObject::Block { fixed } => {
                 if *fixed {
                     let collider = ColliderBuilder::cuboid(
-                        0.5 * transform.scale.x.abs() * BEVY_TO_PHYSICS_SCALE,
-                        0.5 * transform.scale.y.abs() * BEVY_TO_PHYSICS_SCALE,
+                        0.5 * object_and_transform.scale[0].abs() * BEVY_TO_PHYSICS_SCALE,
+                        0.5 * object_and_transform.scale[1].abs() * BEVY_TO_PHYSICS_SCALE,
                     )
                     .translation(vector![
-                        transform.translation.x * BEVY_TO_PHYSICS_SCALE,
-                        transform.translation.y * BEVY_TO_PHYSICS_SCALE
+                        object_and_transform.position[0] * BEVY_TO_PHYSICS_SCALE,
+                        object_and_transform.position[1] * BEVY_TO_PHYSICS_SCALE
                     ])
+                    .rotation(object_and_transform.rotation)
                     .build();
                     self.collider_set.insert(collider);
                     None
                 } else {
-                    let rigid_body = RigidBodyBuilder::dynamic().translation(vector![
-                        transform.translation.x * BEVY_TO_PHYSICS_SCALE,
-                        transform.translation.y * BEVY_TO_PHYSICS_SCALE
-                    ]);
+                    let rigid_body = RigidBodyBuilder::dynamic()
+                        .translation(vector![
+                            object_and_transform.position[0] * BEVY_TO_PHYSICS_SCALE,
+                            object_and_transform.position[1] * BEVY_TO_PHYSICS_SCALE
+                        ])
+                        .rotation(object_and_transform.rotation);
                     let rigid_body_handle = self.rigid_body_set.insert(rigid_body);
                     let collider = ColliderBuilder::cuboid(
-                        0.5 * transform.scale.x.abs() * BEVY_TO_PHYSICS_SCALE,
-                        0.5 * transform.scale.y.abs() * BEVY_TO_PHYSICS_SCALE,
+                        0.5 * object_and_transform.scale[0].abs() * BEVY_TO_PHYSICS_SCALE,
+                        0.5 * object_and_transform.scale[1].abs() * BEVY_TO_PHYSICS_SCALE,
                     )
                     .build();
                     self.collider_set.insert_with_parent(
@@ -139,8 +143,8 @@ impl PhysicsEnvironment {
                 let rigid_body = RigidBodyBuilder::dynamic()
                     .lock_rotations()
                     .translation(vector![
-                        transform.translation.x * BEVY_TO_PHYSICS_SCALE,
-                        transform.translation.y * BEVY_TO_PHYSICS_SCALE
+                        object_and_transform.position[0] * BEVY_TO_PHYSICS_SCALE,
+                        object_and_transform.position[1] * BEVY_TO_PHYSICS_SCALE
                     ]);
                 let rigid_body_handle = self.rigid_body_set.insert(rigid_body);
                 let collider = ColliderBuilder::capsule_y(
@@ -159,10 +163,11 @@ impl PhysicsEnvironment {
             }
             WorldObject::Goal => {
                 self.goals.push(GoalDimensions {
-                    x: transform.translation.x * BEVY_TO_PHYSICS_SCALE,
-                    y: transform.translation.y * BEVY_TO_PHYSICS_SCALE,
-                    width: transform.scale.x.abs() * BEVY_TO_PHYSICS_SCALE,
-                    height: transform.scale.y.abs() * BEVY_TO_PHYSICS_SCALE,
+                    x: object_and_transform.position[0] * BEVY_TO_PHYSICS_SCALE,
+                    y: object_and_transform.position[1] * BEVY_TO_PHYSICS_SCALE,
+                    width: object_and_transform.scale[0].abs() * BEVY_TO_PHYSICS_SCALE,
+                    height: object_and_transform.scale[1].abs() * BEVY_TO_PHYSICS_SCALE,
+                    rotation: object_and_transform.rotation,
                 });
                 None
             }
@@ -182,14 +187,21 @@ impl PhysicsEnvironment {
     pub fn distance_to_goals(&self) -> Option<f32> {
         if let Some(player_handle) = self.player_handle {
             let player_translation = self.rigid_body_set[player_handle].translation();
+            let player_translation = Vec2::new(player_translation.x, player_translation.y);
 
             self.goals
                 .iter()
                 .map(|goal| {
-                    let distance_x =
-                        ((player_translation.x - goal.x).abs() - goal.width / 2.0).max(0.0);
-                    let distance_y =
-                        ((player_translation.y - goal.y).abs() - goal.height / 2.0).max(0.0);
+                    let goal_translation = Vec2::new(goal.x, goal.y);
+                    let x_axis = (Quat::from_rotation_z(goal.rotation) * Vec3::X).truncate();
+                    let y_axis = (Quat::from_rotation_z(goal.rotation) * Vec3::Y).truncate();
+
+                    let distance_x = ((player_translation - goal_translation).dot(x_axis).abs()
+                        - goal.width / 2.0)
+                        .max(0.0);
+                    let distance_y = ((player_translation - goal_translation).dot(y_axis).abs()
+                        - goal.height / 2.0)
+                        .max(0.0);
                     (distance_x.powi(2) + distance_y.powi(2)).sqrt() / BEVY_TO_PHYSICS_SCALE
                 })
                 .reduce(f32::min)
@@ -269,16 +281,10 @@ impl PhysicsEnvironment {
         self.query_pipeline
             .update(&self.rigid_body_set, &self.collider_set);
 
-        if let Some(player_handle) = self.player_handle {
-            if !self.won {
-                let player_translation = self.rigid_body_set[player_handle].translation();
-                for goal in &self.goals {
-                    if (player_translation.x - goal.x).abs() < goal.width / 2.0
-                        && (player_translation.y - goal.y).abs() < goal.height / 2.0
-                    {
-                        self.won = true;
-                        break;
-                    }
+        if !self.won {
+            if let Some(distance) = self.distance_to_goals() {
+                if distance < 1e-7 {
+                    self.won = true;
                 }
             }
         }
@@ -290,6 +296,7 @@ pub struct GoalDimensions {
     y: f32,
     width: f32,
     height: f32,
+    rotation: f32,
 }
 
 #[derive(Default, Clone, Copy)]

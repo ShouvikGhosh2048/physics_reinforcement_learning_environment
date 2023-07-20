@@ -7,9 +7,11 @@ use bevy_egui::{
     egui::{self, DragValue},
     EguiContexts,
 };
-use std::fs;
+use std::{f32::consts::PI, fs};
 
 const ANCHOR_RADIUS: f32 = 5.0;
+const RING_OUTER_RADIUS: f32 = 100.0;
+const RING_INNER_RADIUS: f32 = 90.0;
 
 pub fn add_editor_systems(app: &mut App) {
     app.init_resource::<EditorUiState>()
@@ -19,10 +21,13 @@ pub fn add_editor_systems(app: &mut App) {
 }
 
 #[derive(Component)]
-struct Anchor;
+enum TransformEditor {
+    Anchor,
+    Ring,
+}
 
 fn create_anchor(
-    position: (f32, f32, f32),
+    position: Vec3,
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
@@ -31,10 +36,38 @@ fn create_anchor(
         .spawn(MaterialMesh2dBundle {
             mesh: meshes.add(shape::Circle::new(ANCHOR_RADIUS).into()).into(),
             material: materials.add(ColorMaterial::from(Color::RED)),
-            transform: Transform::from_xyz(position.0, position.1, position.2),
+            transform: Transform::from_translation(position),
             ..default()
         })
-        .insert(Anchor)
+        .insert(TransformEditor::Anchor)
+        .id()
+}
+
+fn create_ring(
+    position: (f32, f32, f32),
+    commands: &mut Commands,
+    meshes: &mut ResMut<Assets<Mesh>>,
+    materials: &mut ResMut<Assets<ColorMaterial>>,
+) -> Entity {
+    commands
+        .spawn(MaterialMesh2dBundle {
+            mesh: meshes
+                .add(
+                    shape::Torus {
+                        radius: (RING_OUTER_RADIUS + RING_INNER_RADIUS) / 2.0,
+                        ring_radius: (RING_OUTER_RADIUS - RING_INNER_RADIUS) / 2.0,
+                        subdivisions_segments: 50,
+                        subdivisions_sides: 50,
+                    }
+                    .into(),
+                )
+                .into(),
+            material: materials.add(ColorMaterial::from(Color::TEAL)),
+            transform: Transform::from_xyz(position.0, position.1, position.2)
+                .with_rotation(Quat::from_rotation_x(PI / 2.0)),
+            ..default()
+        })
+        .insert(TransformEditor::Ring)
         .id()
 }
 
@@ -52,8 +85,11 @@ impl WorldObject {
             WorldObject::Block { .. } | WorldObject::Goal => {
                 let translation = transform.translation.truncate();
                 let size = transform.scale.truncate();
-                (pointer_position - translation).x.abs() < size.x.abs() / 2.0
-                    && (pointer_position - translation).y.abs() < size.y.abs() / 2.0
+                let x_axis = (transform.rotation * Vec3::X).truncate();
+                let y_axis = (transform.rotation * Vec3::Y).truncate();
+                let x_dot = (pointer_position - translation).dot(x_axis);
+                let y_dot = (pointer_position - translation).dot(y_axis);
+                x_dot.abs() < size.x.abs() / 2.0 && y_dot.abs() < size.y.abs() / 2.0
             }
         }
     }
@@ -115,43 +151,51 @@ impl WorldObject {
 
 struct DragState {
     initial_pointer_offset: Vec2,
-    initial_translation: Vec2,
+    initial_camera_translation: Vec2,
 }
 
-enum RectAnchor {
-    Left,
-    Right,
-    Top,
-    Bottom,
+enum RectDrag {
+    // The Vec2 and f32 store the initial value which will be changed by dragging.
+    None(Vec2),
+    Left(Vec2),
+    Right(Vec2),
+    Top(Vec2),
+    Bottom(Vec2),
+    Rotation(f32),
 }
 
-enum Anchors {
+enum TransformEditors {
     Rect {
         left: Entity,
         right: Entity,
         top: Entity,
         bottom: Entity,
-        drag_anchor: Option<RectAnchor>,
+        rotation: Entity,
+        dragging: RectDrag,
     },
-    None,
+    None {
+        initial_translation: Vec2,
+    },
 }
 
-impl Anchors {
+impl TransformEditors {
     fn despawn_anchors(self, commands: &mut Commands) {
         match self {
-            Anchors::Rect {
+            TransformEditors::Rect {
                 left,
                 right,
                 top,
                 bottom,
+                rotation,
                 ..
             } => {
                 commands.entity(left).despawn();
                 commands.entity(right).despawn();
                 commands.entity(top).despawn();
                 commands.entity(bottom).despawn();
+                commands.entity(rotation).despawn();
             }
-            Anchors::None => {}
+            TransformEditors::None { .. } => {}
         }
     }
 
@@ -159,40 +203,47 @@ impl Anchors {
         &self,
         entity_transform: &Transform,
         anchors: &mut Query<
-            (Entity, &mut Transform),
-            (With<Anchor>, Without<WorldObject>, Without<Camera>),
+            (Entity, &mut Transform, &TransformEditor),
+            (Without<WorldObject>, Without<Camera>),
         >,
     ) {
         match &self {
-            Anchors::Rect {
+            TransformEditors::Rect {
                 left,
                 right,
                 top,
                 bottom,
+                rotation,
                 ..
             } => {
                 let translation = entity_transform.translation.truncate();
                 let size = entity_transform.scale.truncate();
-                let width = Vec2::new(size.x, 0.0);
-                let height = Vec2::new(0.0, size.y);
-                let z_index = entity_transform.translation.z + 1.0;
-                let (_, mut left_transform) = anchors.get_mut(*left).unwrap();
-                left_transform.translation = (translation - width / 2.0).extend(z_index);
-                let (_, mut right_transform) = anchors.get_mut(*right).unwrap();
-                right_transform.translation = (translation + width / 2.0).extend(z_index);
-                let (_, mut top_transform) = anchors.get_mut(*top).unwrap();
-                top_transform.translation = (translation + height / 2.0).extend(z_index);
-                let (_, mut bottom_transform) = anchors.get_mut(*bottom).unwrap();
-                bottom_transform.translation = (translation - height / 2.0).extend(z_index);
+                let x_axis = (entity_transform.rotation * Vec3::X).truncate();
+                let y_axis = (entity_transform.rotation * Vec3::Y).truncate();
+                let z_index = entity_transform.translation.z;
+                let (_, mut rotation_transform, _) = anchors.get_mut(*rotation).unwrap();
+                rotation_transform.translation = translation.extend(z_index + 1.0);
+                let (_, mut left_transform, _) = anchors.get_mut(*left).unwrap();
+                left_transform.translation =
+                    (translation - x_axis * size.x / 2.0).extend(z_index + 2.0);
+                let (_, mut right_transform, _) = anchors.get_mut(*right).unwrap();
+                right_transform.translation =
+                    (translation + x_axis * size.x / 2.0).extend(z_index + 2.0);
+                let (_, mut top_transform, _) = anchors.get_mut(*top).unwrap();
+                top_transform.translation =
+                    (translation + y_axis * size.y / 2.0).extend(z_index + 2.0);
+                let (_, mut bottom_transform, _) = anchors.get_mut(*bottom).unwrap();
+                bottom_transform.translation =
+                    (translation - y_axis * size.y / 2.0).extend(z_index + 2.0);
             }
-            Anchors::None => {}
+            TransformEditors::None { .. } => {}
         }
     }
 }
 
 struct SelectedState {
     entity: Entity,
-    anchors: Anchors,
+    anchors: TransformEditors,
     prev_z_index: f32,
 }
 
@@ -202,13 +253,26 @@ impl SelectedState {
         pointer_position: Vec2,
         objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
         anchors: &mut Query<
-            (Entity, &mut Transform),
-            (With<Anchor>, Without<WorldObject>, Without<Camera>),
+            (Entity, &mut Transform, &TransformEditor),
+            (Without<WorldObject>, Without<Camera>),
         >,
     ) -> bool {
-        for (_, transform) in anchors {
-            if (transform.translation.truncate() - pointer_position).length() < ANCHOR_RADIUS {
-                return true;
+        for (_, transform, transform_editor) in anchors {
+            let distance_from_center =
+                (transform.translation.truncate() - pointer_position).length();
+            match transform_editor {
+                TransformEditor::Anchor => {
+                    if distance_from_center < ANCHOR_RADIUS {
+                        return true;
+                    }
+                }
+                TransformEditor::Ring => {
+                    if RING_INNER_RADIUS < distance_from_center
+                        && distance_from_center < RING_OUTER_RADIUS
+                    {
+                        return true;
+                    }
+                }
             }
         }
         let (_, object, transform) = objects.get(self.entity).unwrap();
@@ -231,40 +295,49 @@ impl SelectedState {
         pointer_position: Vec2,
         objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
         selected_by_drag: bool,
-    ) -> Vec2 {
+    ) {
         match &mut self.anchors {
-            Anchors::Rect { drag_anchor, .. } => {
+            TransformEditors::Rect { dragging, .. } => {
                 let (_, object, transform) = objects.get(self.entity).unwrap();
-                let translation = transform.translation.truncate();
-                let [size_x, size_y] = transform.scale.truncate().to_array();
-                let width = Vec2::new(size_x, 0.0);
-                let height = Vec2::new(0.0, size_y);
 
-                if selected_by_drag {
-                    *drag_anchor = None;
-                    transform.translation.truncate()
-                } else if (translation - width / 2.0 - pointer_position).length() < ANCHOR_RADIUS {
-                    *drag_anchor = Some(RectAnchor::Left);
-                    translation - width / 2.0
-                } else if (translation + width / 2.0 - pointer_position).length() < ANCHOR_RADIUS {
-                    *drag_anchor = Some(RectAnchor::Right);
-                    translation + width / 2.0
-                } else if (translation + height / 2.0 - pointer_position).length() < ANCHOR_RADIUS {
-                    *drag_anchor = Some(RectAnchor::Top);
-                    translation + height / 2.0
-                } else if (translation - height / 2.0 - pointer_position).length() < ANCHOR_RADIUS {
-                    *drag_anchor = Some(RectAnchor::Bottom);
-                    translation - height / 2.0
+                let translation = transform.translation.truncate();
+                let size = transform.scale.truncate();
+                let x_axis = (transform.rotation * Vec3::X).truncate();
+                let y_axis = (transform.rotation * Vec3::Y).truncate();
+
+                *dragging = if selected_by_drag {
+                    RectDrag::None(transform.translation.truncate())
+                } else if (pointer_position - (translation - x_axis * size.x / 2.0)).length()
+                    < ANCHOR_RADIUS
+                {
+                    RectDrag::Left(translation - x_axis * size.x / 2.0)
+                } else if (pointer_position - (translation + x_axis * size.x / 2.0)).length()
+                    < ANCHOR_RADIUS
+                {
+                    RectDrag::Right(translation + x_axis * size.x / 2.0)
+                } else if (pointer_position - (translation + y_axis * size.y / 2.0)).length()
+                    < ANCHOR_RADIUS
+                {
+                    RectDrag::Top(translation + y_axis * size.y / 2.0)
+                } else if (pointer_position - (translation - y_axis * size.y / 2.0)).length()
+                    < ANCHOR_RADIUS
+                {
+                    RectDrag::Bottom(translation - y_axis * size.y / 2.0)
+                } else if RING_INNER_RADIUS < (translation - pointer_position).length()
+                    && (translation - pointer_position).length() < RING_OUTER_RADIUS
+                {
+                    RectDrag::Rotation(transform.rotation.to_euler(EulerRot::XYZ).2)
                 } else if object.can_drag(transform, pointer_position) {
-                    *drag_anchor = None;
-                    transform.translation.truncate()
+                    RectDrag::None(transform.translation.truncate())
                 } else {
                     unreachable!("Should be draggable.")
-                }
+                };
             }
-            Anchors::None => {
+            TransformEditors::None {
+                initial_translation,
+            } => {
                 let (_, _, transform) = objects.get(self.entity).unwrap();
-                transform.translation.truncate()
+                *initial_translation = transform.translation.truncate();
             }
         }
     }
@@ -273,62 +346,102 @@ impl SelectedState {
         &mut self,
         objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
         anchors: &mut Query<
-            (Entity, &mut Transform),
-            (With<Anchor>, Without<WorldObject>, Without<Camera>),
+            (Entity, &mut Transform, &TransformEditor),
+            (Without<WorldObject>, Without<Camera>),
         >,
-        new_position: Vec2,
+        initial_pointer_position: Vec2,
+        pointer_position: Vec2,
     ) {
         match &self.anchors {
-            Anchors::Rect { drag_anchor, .. } => {
+            TransformEditors::Rect { dragging, .. } => {
                 let (_, _, mut rect_transform) = objects.get_mut(self.entity).unwrap();
 
-                let mut size = rect_transform.scale.truncate();
-                match drag_anchor {
-                    None => {
+                let translation = rect_transform.translation.truncate();
+                let size = rect_transform.scale.truncate();
+                let x_axis = (rect_transform.rotation * Vec3::X).truncate();
+                let y_axis = (rect_transform.rotation * Vec3::Y).truncate();
+
+                match dragging {
+                    RectDrag::None(initial_translation) => {
+                        let new_position =
+                            *initial_translation + (pointer_position - initial_pointer_position);
                         rect_transform.translation.x = new_position.x;
                         rect_transform.translation.y = new_position.y;
                     }
-                    Some(RectAnchor::Left) => {
-                        let new_translation_x =
-                            (new_position.x + rect_transform.translation.x + size.x / 2.0) / 2.0;
-                        let new_size_x =
-                            rect_transform.translation.x + size.x / 2.0 - new_position.x;
-                        size.x = new_size_x;
-                        rect_transform.scale.x = new_size_x;
-                        rect_transform.translation.x = new_translation_x;
+                    RectDrag::Rotation(initial_rotation) => {
+                        let initial_offset_from_center =
+                            initial_pointer_position - rect_transform.translation.truncate();
+                        let offset_from_center =
+                            pointer_position - rect_transform.translation.truncate();
+                        let rotation_change = if offset_from_center.length() > 1e-7 {
+                            initial_offset_from_center.angle_between(offset_from_center)
+                        } else {
+                            0.0
+                        };
+                        rect_transform.rotation =
+                            Quat::from_rotation_z(initial_rotation + rotation_change);
                     }
-                    Some(RectAnchor::Right) => {
-                        let new_translation_x =
-                            (new_position.x + rect_transform.translation.x - size.x / 2.0) / 2.0;
-                        let new_size_x =
-                            new_position.x - (rect_transform.translation.x - size.x / 2.0);
-                        size.x = new_size_x;
-                        rect_transform.scale.x = new_size_x;
-                        rect_transform.translation.x = new_translation_x;
+                    RectDrag::Left(initial_translation) => {
+                        let new_position =
+                            *initial_translation + (pointer_position - initial_pointer_position);
+                        let left_anchor_position =
+                            translation + (new_position - translation).dot(x_axis) * x_axis;
+                        let right_anchor_position = translation + x_axis * size.x / 2.0;
+                        rect_transform.translation.x =
+                            ((left_anchor_position + right_anchor_position) / 2.0).x;
+                        rect_transform.translation.y =
+                            ((left_anchor_position + right_anchor_position) / 2.0).y;
+                        rect_transform.scale.x =
+                            (right_anchor_position - left_anchor_position).dot(x_axis);
                     }
-                    Some(RectAnchor::Top) => {
-                        let new_translation_y =
-                            (new_position.y + rect_transform.translation.y - size.y / 2.0) / 2.0;
-                        let new_size_y =
-                            new_position.y - (rect_transform.translation.y - size.y / 2.0);
-                        size.y = new_size_y;
-                        rect_transform.scale.y = new_size_y;
-                        rect_transform.translation.y = new_translation_y;
+                    RectDrag::Right(initial_translation) => {
+                        let new_position =
+                            *initial_translation + (pointer_position - initial_pointer_position);
+                        let left_anchor_position = translation - x_axis * size.x / 2.0;
+                        let right_anchor_position =
+                            translation + (new_position - translation).dot(x_axis) * x_axis;
+                        rect_transform.translation.x =
+                            ((left_anchor_position + right_anchor_position) / 2.0).x;
+                        rect_transform.translation.y =
+                            ((left_anchor_position + right_anchor_position) / 2.0).y;
+                        rect_transform.scale.x =
+                            (right_anchor_position - left_anchor_position).dot(x_axis);
                     }
-                    Some(RectAnchor::Bottom) => {
-                        let new_translation_y =
-                            (new_position.y + rect_transform.translation.y + size.y / 2.0) / 2.0;
-                        let new_size_y =
-                            rect_transform.translation.y + size.y / 2.0 - new_position.y;
-                        size.y = new_size_y;
-                        rect_transform.scale.y = new_size_y;
-                        rect_transform.translation.y = new_translation_y;
+                    RectDrag::Top(initial_translation) => {
+                        let new_position =
+                            *initial_translation + (pointer_position - initial_pointer_position);
+                        let bottom_anchor_position = translation - y_axis * size.y / 2.0;
+                        let top_anchor_position =
+                            translation + (new_position - translation).dot(y_axis) * y_axis;
+                        rect_transform.translation.x =
+                            ((bottom_anchor_position + top_anchor_position) / 2.0).x;
+                        rect_transform.translation.y =
+                            ((bottom_anchor_position + top_anchor_position) / 2.0).y;
+                        rect_transform.scale.y =
+                            (top_anchor_position - bottom_anchor_position).dot(y_axis);
+                    }
+                    RectDrag::Bottom(initial_translation) => {
+                        let new_position =
+                            *initial_translation + (pointer_position - initial_pointer_position);
+                        let bottom_anchor_position =
+                            translation + (new_position - translation).dot(y_axis) * y_axis;
+                        let top_anchor_position = translation + y_axis * size.y / 2.0;
+                        rect_transform.translation.x =
+                            ((bottom_anchor_position + top_anchor_position) / 2.0).x;
+                        rect_transform.translation.y =
+                            ((bottom_anchor_position + top_anchor_position) / 2.0).y;
+                        rect_transform.scale.y =
+                            (top_anchor_position - bottom_anchor_position).dot(y_axis);
                     }
                 }
 
                 self.anchors.update_transform(&rect_transform, anchors);
             }
-            Anchors::None => {
+            TransformEditors::None {
+                initial_translation,
+            } => {
+                let new_position =
+                    *initial_translation + (pointer_position - initial_pointer_position);
                 let (_, _, mut transform) = objects.get_mut(self.entity).unwrap();
                 transform.translation.x = new_position.x;
                 transform.translation.y = new_position.y;
@@ -375,7 +488,7 @@ impl EditorUiState {
         let transform = match world_object {
             WorldObject::Block { .. } | WorldObject::Goal => {
                 Transform::from_xyz(position.x, position.y, selection_z_index)
-                    .with_scale(Vec3::new(20.0, 20.0, 1.0))
+                    .with_scale(Vec3::new(50.0, 50.0, 1.0))
             }
             WorldObject::Player => Transform::from_xyz(position.x, position.y, selection_z_index),
         };
@@ -440,60 +553,55 @@ impl EditorUiState {
         commands: &mut Commands,
         meshes: &mut ResMut<Assets<Mesh>>,
         materials: &mut ResMut<Assets<ColorMaterial>>,
-    ) -> Anchors {
+    ) -> TransformEditors {
         match world_object {
             WorldObject::Block { .. } | WorldObject::Goal => {
-                let translation = transform.translation;
+                let translation = transform.translation.truncate();
                 let size = transform.scale.truncate();
+                let x_axis = (transform.rotation * Vec3::X).truncate();
+                let y_axis = (transform.rotation * Vec3::Y).truncate();
+                let rotation = create_ring(
+                    (translation.x, translation.y, selection_z_index + 1.0),
+                    commands,
+                    meshes,
+                    materials,
+                );
                 let left = create_anchor(
-                    (
-                        translation.x - size.x / 2.0,
-                        translation.y,
-                        selection_z_index + 1.0,
-                    ),
+                    (translation - x_axis * size.x / 2.0).extend(selection_z_index + 2.0),
                     commands,
                     meshes,
                     materials,
                 );
                 let right = create_anchor(
-                    (
-                        translation.x + size.x / 2.0,
-                        translation.y,
-                        selection_z_index + 1.0,
-                    ),
+                    (translation + x_axis * size.x / 2.0).extend(selection_z_index + 2.0),
                     commands,
                     meshes,
                     materials,
                 );
                 let top = create_anchor(
-                    (
-                        translation.x,
-                        translation.y + size.y / 2.0,
-                        selection_z_index + 1.0,
-                    ),
+                    (translation + y_axis * size.y / 2.0).extend(selection_z_index + 2.0),
                     commands,
                     meshes,
                     materials,
                 );
                 let bottom = create_anchor(
-                    (
-                        translation.x,
-                        translation.y - size.y / 2.0,
-                        selection_z_index + 1.0,
-                    ),
+                    (translation - y_axis * size.y / 2.0).extend(selection_z_index + 2.0),
                     commands,
                     meshes,
                     materials,
                 );
-                Anchors::Rect {
+                TransformEditors::Rect {
                     left,
                     right,
                     top,
                     bottom,
-                    drag_anchor: None,
+                    rotation,
+                    dragging: RectDrag::None(transform.translation.truncate()),
                 }
             }
-            WorldObject::Player => Anchors::None,
+            WorldObject::Player => TransformEditors::None {
+                initial_translation: transform.translation.truncate(),
+            },
         }
     }
 
@@ -503,8 +611,8 @@ impl EditorUiState {
         pointer_offset_from_center: Vec2,
         objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
         anchors: &mut Query<
-            (Entity, &mut Transform),
-            (With<Anchor>, Without<WorldObject>, Without<Camera>),
+            (Entity, &mut Transform, &TransformEditor),
+            (Without<WorldObject>, Without<Camera>),
         >,
         camera_transform: &Transform,
         commands: &mut Commands,
@@ -514,11 +622,10 @@ impl EditorUiState {
         // First check selected.
         if let Some(selected_state) = &mut self.selected {
             if selected_state.can_drag(pointer_position, objects, anchors) {
-                let initial_translation =
-                    selected_state.drag_start(pointer_position, objects, false);
+                selected_state.drag_start(pointer_position, objects, false);
                 self.drag = Some(DragState {
                     initial_pointer_offset: pointer_offset_from_center,
-                    initial_translation,
+                    initial_camera_translation: camera_transform.translation.truncate(),
                 });
                 return;
             } else {
@@ -544,15 +651,15 @@ impl EditorUiState {
 
         if let Some(drag_entity) = drag_entity {
             let selected_state = self.select(drag_entity, objects, commands, meshes, materials);
-            let initial_translation = selected_state.drag_start(pointer_position, objects, true);
+            selected_state.drag_start(pointer_position, objects, true);
             self.drag = Some(DragState {
                 initial_pointer_offset: pointer_offset_from_center,
-                initial_translation,
+                initial_camera_translation: camera_transform.translation.truncate(),
             });
         } else {
             self.drag = Some(DragState {
                 initial_pointer_offset: pointer_offset_from_center,
-                initial_translation: camera_transform.translation.truncate(),
+                initial_camera_translation: camera_transform.translation.truncate(),
             });
         }
     }
@@ -562,25 +669,28 @@ impl EditorUiState {
         pointer_offset_from_center: Vec2,
         objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
         anchors: &mut Query<
-            (Entity, &mut Transform),
-            (With<Anchor>, Without<WorldObject>, Without<Camera>),
+            (Entity, &mut Transform, &TransformEditor),
+            (Without<WorldObject>, Without<Camera>),
         >,
         camera_transform: &mut Transform,
     ) {
         if let Some(DragState {
             initial_pointer_offset,
-            initial_translation,
+            initial_camera_translation,
         }) = self.drag
         {
             if let Some(selected_state) = &mut self.selected {
-                let new_position =
-                    initial_translation + pointer_offset_from_center - initial_pointer_offset;
-                selected_state.drag(objects, anchors, new_position);
+                selected_state.drag(
+                    objects,
+                    anchors,
+                    initial_camera_translation + initial_pointer_offset,
+                    initial_camera_translation + pointer_offset_from_center,
+                );
             } else {
                 // Camera will dragged in the opposite direction,
                 // this makes it appear as if the world is dragged in the correct direction.
-                let new_position =
-                    initial_translation - (pointer_offset_from_center - initial_pointer_offset);
+                let new_position = initial_camera_translation
+                    - (pointer_offset_from_center - initial_pointer_offset);
                 camera_transform.translation.x = new_position.x;
                 camera_transform.translation.y = new_position.y;
             }
@@ -601,19 +711,12 @@ fn setup_editor(
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
     for object_and_transform in world.objects.iter() {
-        let ObjectAndTransform {
-            object,
-            position,
-            scale,
-        } = object_and_transform;
-        let transform = Transform {
-            translation: Vec3::from_array(*position),
-            scale: Vec3::from_array(*scale),
-            ..Default::default()
-        };
-        object
-            .clone()
-            .create_entity(transform, &mut commands, &mut meshes, &mut materials);
+        object_and_transform.object.clone().create_entity(
+            object_and_transform.transform(),
+            &mut commands,
+            &mut meshes,
+            &mut materials,
+        );
     }
     let mut camera_transform = camera.iter_mut().next().unwrap();
     camera_transform.translation.x = 0.0;
@@ -626,7 +729,7 @@ fn cleanup_editor(
     mut world: ResMut<World>,
     mut ui_state: ResMut<EditorUiState>,
     mut objects: Query<(Entity, &mut WorldObject, &mut Transform)>,
-    anchors: Query<Entity, (With<Anchor>, Without<WorldObject>)>,
+    anchors: Query<Entity, (With<TransformEditor>, Without<WorldObject>)>,
 ) {
     ui_state.clear_selection(&mut objects, &mut commands);
 
@@ -640,6 +743,7 @@ fn cleanup_editor(
             object: object.clone(),
             position: transform.translation.to_array(),
             scale: transform.scale.to_array(),
+            rotation: transform.rotation.to_euler(EulerRot::XYZ).2,
         });
         commands.entity(entity).despawn();
     }
@@ -650,15 +754,15 @@ fn load_world(
     commands: &mut Commands,
     objects: &Query<(Entity, &mut WorldObject, &mut Transform)>,
     anchors: &Query<
-        (Entity, &mut Transform),
-        (With<Anchor>, Without<WorldObject>, Without<Camera>),
+        (Entity, &mut Transform, &TransformEditor),
+        (Without<WorldObject>, Without<Camera>),
     >,
     camera: &mut Transform,
     ui_state: &mut ResMut<EditorUiState>,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
 ) {
-    for (anchor, _) in anchors.iter() {
+    for (anchor, _, _) in anchors.iter() {
         commands.entity(anchor).despawn();
     }
 
@@ -667,19 +771,12 @@ fn load_world(
     }
 
     for object_and_transform in world.objects.iter() {
-        let ObjectAndTransform {
-            object,
-            position,
-            scale,
-        } = object_and_transform;
-        let transform = Transform {
-            translation: Vec3::from_array(*position),
-            scale: Vec3::from_array(*scale),
-            ..Default::default()
-        };
-        object
-            .clone()
-            .create_entity(transform, commands, meshes, materials);
+        object_and_transform.object.clone().create_entity(
+            object_and_transform.transform(),
+            commands,
+            meshes,
+            materials,
+        );
     }
     camera.translation.x = 0.0;
     camera.translation.y = 0.0;
@@ -699,8 +796,8 @@ fn editor_ui_system(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut anchors: Query<
-        (Entity, &mut Transform),
-        (With<Anchor>, Without<WorldObject>, Without<Camera>),
+        (Entity, &mut Transform, &TransformEditor),
+        (Without<WorldObject>, Without<Camera>),
     >,
 ) {
     let mut camera_transform = camera.iter_mut().next().unwrap();
@@ -769,6 +866,7 @@ fn editor_ui_system(
                                 object: object.clone(),
                                 position: transform.translation.to_array(),
                                 scale: transform.scale.to_array(),
+                                rotation: transform.rotation.to_euler(EulerRot::XYZ).2,
                             })
                             .collect();
                         let world = World { objects };
@@ -812,7 +910,7 @@ fn editor_ui_system(
                         egui::Grid::new("Block grid")
                             .spacing([25.0, 5.0])
                             .show(ui, |ui| {
-                                ui.label("Transform:");
+                                ui.label("Translation:");
                                 ui.horizontal(|ui| {
                                     ui.add(DragValue::new(&mut transform.translation.x));
                                     ui.add(DragValue::new(&mut transform.translation.y));
@@ -824,6 +922,13 @@ fn editor_ui_system(
                                     ui.add(DragValue::new(&mut transform.scale.x));
                                     ui.add(DragValue::new(&mut transform.scale.y));
                                 });
+                                ui.end_row();
+
+                                ui.label("Rotation:");
+                                let mut rotation =
+                                    transform.rotation.to_euler(EulerRot::XYZ).2 * 180.0 / PI;
+                                ui.add(DragValue::new(&mut rotation));
+                                transform.rotation = Quat::from_rotation_z(rotation * PI / 180.0);
                                 ui.end_row();
 
                                 ui.label("Fixed");
@@ -848,7 +953,7 @@ fn editor_ui_system(
                         egui::Grid::new("Goal grid")
                             .spacing([25.0, 5.0])
                             .show(ui, |ui| {
-                                ui.label("Transform:");
+                                ui.label("Translation:");
                                 ui.horizontal(|ui| {
                                     ui.add(DragValue::new(&mut transform.translation.x));
                                     ui.add(DragValue::new(&mut transform.translation.y));
@@ -860,6 +965,13 @@ fn editor_ui_system(
                                     ui.add(DragValue::new(&mut transform.scale.x));
                                     ui.add(DragValue::new(&mut transform.scale.y));
                                 });
+                                ui.end_row();
+
+                                ui.label("Rotation:");
+                                let mut rotation =
+                                    transform.rotation.to_euler(EulerRot::XYZ).2 * 180.0 / PI;
+                                ui.add(DragValue::new(&mut rotation));
+                                transform.rotation = Quat::from_rotation_z(rotation * PI / 180.0);
                                 ui.end_row();
                             });
                         selected.anchors.update_transform(&transform, &mut anchors);
