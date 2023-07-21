@@ -401,7 +401,7 @@ fn setup_visualization(
 
     View::Visualize {
         agent: agent.clone(),
-        environment,
+        environment: Box::new(environment),
     }
 }
 
@@ -442,7 +442,7 @@ enum View {
     Train,
     Visualize {
         agent: Agent,
-        environment: PhysicsEnvironment,
+        environment: Box<PhysicsEnvironment>,
     },
 }
 
