@@ -68,7 +68,7 @@ fn ui_system(
                                         &mut ui_state.agent,
                                         Algorithm::Genetic {
                                             number_of_agents: 1000,
-                                            repeat_move: 10,
+                                            repeat_move: 20,
                                         },
                                         "Genetic",
                                     );
@@ -251,20 +251,36 @@ fn spawn_training_thread(
                 }
 
                 loop {
-                    generation.sort_by(|(score1, _), (score2, _)| {
-                        if score1 < score2 {
-                            Ordering::Less
-                        } else if score1 > score2 {
-                            Ordering::Greater
-                        } else {
-                            Ordering::Equal
-                        }
-                    });
+                    let min_agent = generation
+                        .iter()
+                        .min_by(|(score1, _), (score2, _)| {
+                            if score1 < score2 {
+                                Ordering::Less
+                            } else if score1 > score2 {
+                                Ordering::Greater
+                            } else {
+                                Ordering::Equal
+                            }
+                        })
+                        .unwrap();
+                    let max_score = generation
+                        .iter()
+                        .max_by(|(score1, _), (score2, _)| {
+                            if score1 < score2 {
+                                Ordering::Less
+                            } else if score1 > score2 {
+                                Ordering::Greater
+                            } else {
+                                Ordering::Equal
+                            }
+                        })
+                        .unwrap()
+                        .0;
                     if sender
                         .send((
-                            generation[0].0,
+                            min_agent.0,
                             Agent::GeneticAgent {
-                                moves: generation[0].1.clone(),
+                                moves: min_agent.1.clone(),
                                 curr: 0,
                                 repeat_move,
                             },
@@ -274,38 +290,38 @@ fn spawn_training_thread(
                         return;
                     }
 
-                    generation.truncate(number_of_agents / 10);
-                    for i in 0..number_of_agents / 10 {
-                        for _ in 0..6 {
-                            let mut agent = generation[i].1.clone();
-                            for player_move in agent.iter_mut() {
-                                if rng.gen::<f64>() < 0.1 {
-                                    player_move.left = rng.gen();
-                                }
-                                if rng.gen::<f64>() < 0.1 {
-                                    player_move.right = rng.gen();
-                                }
-                                if rng.gen::<f64>() < 0.1 {
-                                    player_move.up = rng.gen();
-                                }
-                            }
+                    let mut new_generation = vec![];
+                    for _ in 0..number_of_agents {
+                        let mut parents = generation
+                            .choose_multiple_weighted(&mut rng, 2, |(score, _)| {
+                                max_score + 1.0 - score
+                            })
+                            .unwrap();
+                        let parent1 = &parents.next().unwrap().1;
+                        let parent2 = &parents.next().unwrap().1;
 
-                            generation.push((agent_score(&agent), agent));
-                        }
-                    }
-
-                    while generation.len() < number_of_agents {
                         let mut agent = vec![];
-                        for _ in 0..number_of_steps / repeat_move {
-                            agent.push(Move {
-                                left: rng.gen(),
-                                right: rng.gen(),
-                                up: rng.gen(),
-                            });
+                        for i in 0..number_of_steps / repeat_move {
+                            if rng.gen() {
+                                agent.push(parent1[i]);
+                            } else {
+                                agent.push(parent2[i]);
+                            }
                         }
-
-                        generation.push((agent_score(&agent), agent));
+                        for player_move in agent.iter_mut() {
+                            if rng.gen::<f64>() < 0.1 {
+                                player_move.left = rng.gen();
+                            }
+                            if rng.gen::<f64>() < 0.1 {
+                                player_move.right = rng.gen();
+                            }
+                            if rng.gen::<f64>() < 0.1 {
+                                player_move.up = rng.gen();
+                            }
+                        }
+                        new_generation.push((agent_score(&agent), agent));
                     }
+                    generation = new_generation;
                 }
             }
         }
@@ -442,7 +458,7 @@ impl Default for Algorithm {
     fn default() -> Self {
         Algorithm::Genetic {
             number_of_agents: 1000,
-            repeat_move: 10,
+            repeat_move: 20,
         }
     }
 }
