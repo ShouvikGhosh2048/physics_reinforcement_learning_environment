@@ -921,8 +921,31 @@ fn editor_ui_system(
             if let Some(selected) = &mut ui_state.selected {
                 let (_, mut object, mut transform) = objects.get_mut(selected.entity).unwrap();
 
-                if ui.button("Back").clicked() {
+                let mut back_clicked = false;
+                let mut delete_clicked = false;
+
+                ui.horizontal(|ui| {
+                    if ui.button("Back").clicked() {
+                        back_clicked = true;
+                        return;
+                    }
+
+                    ui.add_space(100.0);
+
+                    if !matches!(&*object, WorldObject::Player) && ui.button("Delete").clicked() {
+                        delete_clicked = true;
+                    }
+                });
+
+                if back_clicked {
                     ui_state.clear_selection(&mut objects, &mut commands);
+                    return;
+                }
+
+                if delete_clicked {
+                    let entity = selected.entity;
+                    ui_state.clear_selection(&mut objects, &mut commands);
+                    commands.entity(entity).despawn();
                     return;
                 }
 
