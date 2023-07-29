@@ -844,6 +844,7 @@ fn editor_ui_system(
         .scroll2([false, true])
         .show(contexts.ctx_mut(), |ui| {
             let mut new_state = None;
+            let mut new_world_clicked = false;
 
             ui.horizontal(|ui| {
                 if ui.button("Play world").clicked() {
@@ -857,10 +858,31 @@ fn editor_ui_system(
                 if has_goal && ui.button("Train agent on world").clicked() {
                     new_state = Some(AppState::Train);
                 }
+
+                if ui.button("New world").clicked() {
+                    new_world_clicked = true;
+                }
             });
 
             if let Some(state) = new_state {
                 next_state.set(state);
+                return;
+            }
+
+            if new_world_clicked {
+                ui_state.drag_end();
+                ui_state.clear_selection(&mut objects, &mut commands);
+                for (entity, object, mut transform) in objects.iter_mut() {
+                    if let WorldObject::Player = &*object {
+                        *transform = Transform::default();
+                    } else {
+                        commands.entity(entity).despawn();
+                    }
+                }
+                camera_transform.translation.x = 0.0;
+                camera_transform.translation.y = 0.0;
+                camera_transform.scale.x = 1.0;
+                camera_transform.scale.y = 1.0;
                 return;
             }
 
