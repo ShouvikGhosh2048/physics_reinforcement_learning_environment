@@ -1,4 +1,4 @@
-use std::f32::consts::PI;
+use std::cmp::Ordering;
 
 use bevy::prelude::*;
 use rapier2d::prelude::*;
@@ -213,58 +213,109 @@ impl PhysicsEnvironment {
     pub fn step(&mut self, player_move: Move) {
         if let Some(player_handle) = self.player_handle {
             let player_translation = self.rigid_body_set[player_handle].translation();
+            let player_lower_center = vector![
+                player_translation.x,
+                player_translation.y - PLAYER_DEPTH * BEVY_TO_PHYSICS_SCALE / 2.0
+            ];
 
-            let mut on_ground = false;
-            let number_of_points = 21;
-            for i in 0..number_of_points {
-                let fraction = i as f32 / (number_of_points - 1) as f32;
-                let arc_angle = (1.0 - fraction) * PI / 4.0 + fraction * 3.0 * PI / 4.0;
-                let point_position = point![
-                    player_translation.x - PLAYER_RADIUS * BEVY_TO_PHYSICS_SCALE * arc_angle.cos(),
-                    player_translation.y
-                        - PLAYER_DEPTH * BEVY_TO_PHYSICS_SCALE / 2.0
-                        - PLAYER_RADIUS * BEVY_TO_PHYSICS_SCALE * arc_angle.sin()
-                ];
-                let ray_dir = vector![0.0, -1.0];
-                let ray = rapier2d::prelude::Ray::new(point_position, ray_dir);
-                let max_toi = 0.5 * BEVY_TO_PHYSICS_SCALE;
-                let solid = true;
-                let filter = QueryFilter::new().exclude_rigid_body(player_handle);
-                if self
-                    .query_pipeline
-                    .cast_ray(
-                        &self.rigid_body_set,
-                        &self.collider_set,
-                        &ray,
-                        max_toi,
-                        solid,
-                        filter,
-                    )
-                    .is_some()
-                {
-                    on_ground = true;
+            let mut player_floor_contacts = vec![];
+            let player_collider = self.rigid_body_set[player_handle].colliders()[0];
+            for contact_pair in self.narrow_phase.contacts_with(player_collider) {
+                let contact_collider = if contact_pair.collider1 != player_collider {
+                    contact_pair.collider1
+                } else {
+                    contact_pair.collider2
                 };
+                let rigid_body = self.collider_set[contact_collider].parent();
+                if contact_pair.has_any_active_contact {
+                    for manifold in &contact_pair.manifolds {
+                        for solver_contact in &manifold.data.solver_contacts {
+                            let player_floor_contact = (solver_contact.point - player_lower_center)
+                                / (PLAYER_RADIUS * BEVY_TO_PHYSICS_SCALE);
+                            if player_floor_contact.y < -0.707 {
+                                player_floor_contacts.push((solver_contact.point, rigid_body));
+                            }
+                        }
+                    }
+                }
             }
 
-            if on_ground {
-                let player = &mut self.rigid_body_set[player_handle];
+            let on_ground = !player_floor_contacts.is_empty();
 
-                let mut impulse = vector![0.0, 0.0];
+            if on_ground {
+                let mut player_impulse = vector![0.0, 0.0];
+
                 if player_move.left {
-                    impulse.x -= 0.003;
+                    let (point, rigid_body) = player_floor_contacts
+                        .iter()
+                        .min_by(|(point1, _), (point2, _)| {
+                            if point1.x < point2.x {
+                                Ordering::Less
+                            } else if point1.x > point2.x {
+                                Ordering::Greater
+                            } else {
+                                Ordering::Equal
+                            }
+                        })
+                        .unwrap();
+
+                    let mut normal = *point - player_lower_center;
+                    normal /= (normal.x.powi(2) + normal.y.powi(2)).sqrt();
+                    let impulse = vector![0.003 * normal.y, -0.003 * normal.x]; // Rotate normal
+
+                    if let Some(rigid_body) = rigid_body {
+                        self.rigid_body_set[*rigid_body]
+                            .apply_impulse_at_point(-impulse, *point, true);
+                    }
+                    player_impulse += impulse;
                 }
+
                 if player_move.right {
-                    impulse.x += 0.003;
+                    let (point, rigid_body) = player_floor_contacts
+                        .iter()
+                        .max_by(|(point1, _), (point2, _)| {
+                            if point1.x < point2.x {
+                                Ordering::Less
+                            } else if point1.x > point2.x {
+                                Ordering::Greater
+                            } else {
+                                Ordering::Equal
+                            }
+                        })
+                        .unwrap();
+
+                    let mut normal = *point - player_lower_center;
+                    normal /= (normal.x.powi(2) + normal.y.powi(2)).sqrt();
+                    let impulse = vector![-0.003 * normal.y, 0.003 * normal.x]; // Rotate normal
+
+                    if let Some(rigid_body) = rigid_body {
+                        self.rigid_body_set[*rigid_body]
+                            .apply_impulse_at_point(-impulse, *point, true);
+                    }
+                    player_impulse += impulse;
                 }
+
                 if player_move.up {
-                    impulse.y += 0.07;
+                    for (point, rigid_body) in &player_floor_contacts {
+                        let mut normal = *point - player_lower_center;
+                        normal /= (normal.x.powi(2) + normal.y.powi(2)).sqrt();
+                        let impulse = vector![-0.1 * normal.x, -0.1 * normal.y]
+                            / player_floor_contacts.len() as f32;
+
+                        if let Some(rigid_body) = rigid_body {
+                            self.rigid_body_set[*rigid_body]
+                                .apply_impulse_at_point(-impulse, *point, true);
+                        }
+                        player_impulse += impulse;
+                    }
                 }
-                player.apply_impulse(impulse, true);
+
+                self.rigid_body_set[player_handle].apply_impulse(player_impulse, true);
             }
         }
 
         self.physics_pipeline.step(
-            &vector![0.0, -1.0],
+            &vector![0.0, -2.0],
             &self.integration_parameters,
             &mut self.island_manager,
             &mut self.broad_phase,
