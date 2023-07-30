@@ -69,6 +69,8 @@ fn ui_system(
                                         Algorithm::Genetic {
                                             number_of_agents: 1000,
                                             repeat_move: 20,
+                                            mutation_rate: 0.1,
+                                            keep_best: false,
                                         },
                                         "Genetic",
                                     );
@@ -81,6 +83,8 @@ fn ui_system(
                                 Algorithm::Genetic {
                                     number_of_agents,
                                     repeat_move,
+                                    mutation_rate,
+                                    keep_best,
                                 } => {
                                     ui.label("Number of agents: ");
                                     ui.add(
@@ -90,6 +94,14 @@ fn ui_system(
                                     ui.end_row();
                                     ui.label("Repeat move: ");
                                     ui.add(egui::DragValue::new(repeat_move).clamp_range(1..=100));
+                                    ui.end_row();
+                                    ui.label("Mutation rate: ");
+                                    ui.add(
+                                        egui::DragValue::new(mutation_rate).clamp_range(0.0..=1.0),
+                                    );
+                                    ui.end_row();
+                                    ui.label("Keep best from previous generation: ");
+                                    ui.checkbox(keep_best, "");
                                     ui.end_row();
                                 }
                             }
@@ -207,6 +219,8 @@ fn spawn_training_thread(
             Algorithm::Genetic {
                 number_of_agents,
                 repeat_move,
+                mutation_rate,
+                keep_best,
             } => {
                 let agent_score = |agent: &Vec<Move>| {
                     let mut environment = PhysicsEnvironment::from_world(&world);
@@ -290,8 +304,14 @@ fn spawn_training_thread(
                         return;
                     }
 
-                    let mut new_generation = vec![];
-                    for _ in 0..number_of_agents {
+                    let mut new_generation = if keep_best {
+                        vec![min_agent.clone()]
+                    } else {
+                        vec![]
+                    };
+                    let additional_agents = number_of_agents - new_generation.len();
+
+                    for _ in 0..additional_agents {
                         let mut parents = generation
                             .choose_multiple_weighted(&mut rng, 2, |(score, _)| {
                                 max_score + 1.0 - score
@@ -309,13 +329,13 @@ fn spawn_training_thread(
                             }
                         }
                         for player_move in agent.iter_mut() {
-                            if rng.gen::<f64>() < 0.1 {
+                            if rng.gen::<f32>() < mutation_rate {
                                 player_move.left = rng.gen();
                             }
-                            if rng.gen::<f64>() < 0.1 {
+                            if rng.gen::<f32>() < mutation_rate {
                                 player_move.right = rng.gen();
                             }
-                            if rng.gen::<f64>() < 0.1 {
+                            if rng.gen::<f32>() < mutation_rate {
                                 player_move.up = rng.gen();
                             }
                         }
@@ -451,6 +471,8 @@ enum Algorithm {
     Genetic {
         number_of_agents: usize,
         repeat_move: usize,
+        mutation_rate: f32,
+        keep_best: bool,
     },
 }
 
@@ -459,6 +481,8 @@ impl Default for Algorithm {
         Algorithm::Genetic {
             number_of_agents: 1000,
             repeat_move: 20,
+            mutation_rate: 0.1,
+            keep_best: false,
         }
     }
 }
