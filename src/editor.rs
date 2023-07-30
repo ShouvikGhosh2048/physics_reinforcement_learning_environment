@@ -1176,30 +1176,32 @@ fn editor_ui_system(
         ui_state.drag_end();
     }
 
-    if !pointer_on_egui && ui_state.drag.is_none() {
-        for event in mouse_wheel_events.iter() {
-            let scale = camera_transform.scale.x;
-            let new_scale = (scale * 0.9_f32.powf(event.y)).max(0.01);
-            camera_transform.scale.x = new_scale;
-            camera_transform.scale.y = new_scale;
-            for (_, mut transform, transform_editor) in transform_editors.iter_mut() {
-                match transform_editor {
-                    TransformEditor::Anchor => {
-                        transform.scale.x = new_scale;
-                        transform.scale.y = new_scale;
-                    }
-                    TransformEditor::Ring => {
-                        // The torus was initially parallel to the XZ plane, so we scale those directions.
-                        transform.scale.x = new_scale;
-                        transform.scale.z = new_scale;
-                    }
+    if !pointer_on_egui && ui_state.drag.is_none() && !mouse_wheel_events.is_empty() {
+        let scale = camera_transform.scale.x;
+        let total_scroll = mouse_wheel_events.iter().map(|event| event.y).sum::<f32>();
+        let new_scale = (scale * 0.9_f32.powf(total_scroll)).max(0.01);
+
+        camera_transform.scale.x = new_scale;
+        camera_transform.scale.y = new_scale;
+
+        for (_, mut transform, transform_editor) in transform_editors.iter_mut() {
+            match transform_editor {
+                TransformEditor::Anchor => {
+                    transform.scale.x = new_scale;
+                    transform.scale.y = new_scale;
+                }
+                TransformEditor::Ring => {
+                    // The torus was initially parallel to the XZ plane, so we scale those directions.
+                    transform.scale.x = new_scale;
+                    transform.scale.z = new_scale;
                 }
             }
-            let new_translation = new_scale
-                * (camera_transform.translation.truncate() / scale
-                    + pointer_position * (1.0 / new_scale - 1.0 / scale));
-            camera_transform.translation.x = new_translation.x;
-            camera_transform.translation.y = new_translation.y;
         }
+
+        let new_translation = new_scale
+            * (camera_transform.translation.truncate() / scale
+                + pointer_position * (1.0 / new_scale - 1.0 / scale));
+        camera_transform.translation.x = new_translation.x;
+        camera_transform.translation.y = new_translation.y;
     }
 }
