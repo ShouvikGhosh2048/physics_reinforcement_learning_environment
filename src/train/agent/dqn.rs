@@ -3,13 +3,11 @@
 // https://github.com/coreylowman/dfdx/blob/main/examples/rl-dqn.rs
 // https://pytorch.org/tutorials/intermediate/reinforcement_q_learning.html
 
-use crate::common::{Move, PhysicsEnvironment, World};
 use super::Agent;
+use crate::common::{Move, PhysicsEnvironment, World};
 
-use std::collections::VecDeque;
-use bevy_egui::egui::{Ui, DragValue};
+use bevy_egui::egui::{DragValue, Ui};
 use crossbeam::channel::Sender;
-use rand::prelude::*;
 use dfdx::{
     optim::Sgd,
     prelude::{huber_loss, DeviceBuildExt, Linear, Module, Optimizer, ReLU, ZeroGrads},
@@ -17,6 +15,8 @@ use dfdx::{
     tensor::{AsArray, AutoDevice, Tensor, TensorFrom, Trace},
     tensor_ops::{Backward, MaxTo, Momentum, SelectTo, SgdConfig},
 };
+use rand::prelude::*;
+use std::collections::VecDeque;
 
 type QNetwork = ((Linear<4, 32>, ReLU), (Linear<32, 32>, ReLU), Linear<32, 8>);
 type QNetworkModel = (
@@ -68,9 +68,7 @@ pub struct DQNAlgorithm {
 
 impl Default for DQNAlgorithm {
     fn default() -> Self {
-        DQNAlgorithm {
-            repeat_move: 20,
-        }
+        DQNAlgorithm { repeat_move: 20 }
     }
 }
 
@@ -83,7 +81,7 @@ impl DQNAlgorithm {
 
     pub fn train(&self, world: World, number_of_steps: usize, sender: Sender<(f32, Agent)>) {
         let mut rng = thread_rng();
-        
+
         let dev = AutoDevice::default();
         let mut q_net = dev.build_module::<QNetwork, f32>();
         let mut target_q_net = q_net.clone();
@@ -107,7 +105,7 @@ impl DQNAlgorithm {
                     dqn: q_net.clone(),
                     curr: (Move::default(), self.repeat_move),
                     repeat_move: self.repeat_move,
-                    dev: AutoDevice::default()
+                    dev: AutoDevice::default(),
                 };
                 let mut environment = PhysicsEnvironment::from_world(&world);
                 let mut score = f32::INFINITY;
@@ -120,11 +118,11 @@ impl DQNAlgorithm {
                     }
                 }
 
-                let agent = Agent::DQN(DQNAgent {
+                let agent = Agent::Dqn(DQNAgent {
                     dqn: q_net.clone(),
                     curr: (Move::default(), self.repeat_move),
                     repeat_move: self.repeat_move,
-                    dev: AutoDevice::default()
+                    dev: AutoDevice::default(),
                 });
                 if sender.send((score, agent)).is_err() {
                     return;
@@ -132,7 +130,7 @@ impl DQNAlgorithm {
             }
 
             let mut environment = PhysicsEnvironment::from_world(&world);
-            for _ in 0..number_of_steps/self.repeat_move {
+            for _ in 0..number_of_steps / self.repeat_move {
                 let state = dev.tensor(environment.state().unwrap());
                 let q_values = q_net.forward(state.clone());
 
@@ -159,12 +157,7 @@ impl DQNAlgorithm {
                 let reward = previous_score - environment.distance_to_goals().unwrap();
 
                 let next_state = dev.tensor(environment.state().unwrap());
-                state_actions.push_back((
-                    state.array(),
-                    action_index,
-                    reward,
-                    next_state.array(),
-                ));
+                state_actions.push_back((state.array(), action_index, reward, next_state.array()));
                 if state_actions.len() == 10000 {
                     state_actions.pop_front();
                 }
@@ -176,15 +169,14 @@ impl DQNAlgorithm {
                 let batch = state_actions.iter().choose_multiple(&mut rng, BATCH_SIZE);
                 let states = batch
                     .iter()
-                    .flat_map(|(state, _, _, _)| state.iter().map(|x| *x))
+                    .flat_map(|(state, _, _, _)| state.iter().copied())
                     .collect::<Vec<_>>();
                 let states: Tensor<Rank2<BATCH_SIZE, 4>, _, _> = dev.tensor(states);
                 let next_states = batch
                     .iter()
-                    .flat_map(|(_, _, _, next_state)| next_state.iter().map(|x| *x))
+                    .flat_map(|(_, _, _, next_state)| next_state.iter().copied())
                     .collect::<Vec<_>>();
-                let next_states: Tensor<Rank2<BATCH_SIZE, 4>, _, _> =
-                    dev.tensor(next_states);
+                let next_states: Tensor<Rank2<BATCH_SIZE, 4>, _, _> = dev.tensor(next_states);
                 let rewards = batch
                     .iter()
                     .map(|(_, _, reward, _)| *reward)
@@ -210,11 +202,16 @@ impl DQNAlgorithm {
                 sgd.update(&mut q_net, &grads).expect("Unused params");
                 q_net.zero_grads(&mut grads);
 
-                target_q_net.0.0.weight = target_q_net.0.0.weight * 0.99 + q_net.0.0.weight.clone() * 0.01;
-                target_q_net.0.0.bias = target_q_net.0.0.bias * 0.99 + q_net.0.0.bias.clone() * 0.01;
-                target_q_net.1.0.weight = target_q_net.1.0.weight * 0.99 + q_net.1.0.weight.clone() * 0.01;
-                target_q_net.1.0.bias = target_q_net.1.0.bias * 0.99 + q_net.1.0.bias.clone() * 0.01;
-                target_q_net.2.weight = target_q_net.2.weight * 0.99 + q_net.2.weight.clone() * 0.01;
+                target_q_net.0 .0.weight =
+                    target_q_net.0 .0.weight * 0.99 + q_net.0 .0.weight.clone() * 0.01;
+                target_q_net.0 .0.bias =
+                    target_q_net.0 .0.bias * 0.99 + q_net.0 .0.bias.clone() * 0.01;
+                target_q_net.1 .0.weight =
+                    target_q_net.1 .0.weight * 0.99 + q_net.1 .0.weight.clone() * 0.01;
+                target_q_net.1 .0.bias =
+                    target_q_net.1 .0.bias * 0.99 + q_net.1 .0.bias.clone() * 0.01;
+                target_q_net.2.weight =
+                    target_q_net.2.weight * 0.99 + q_net.2.weight.clone() * 0.01;
                 target_q_net.2.bias = target_q_net.2.bias * 0.99 + q_net.2.bias.clone() * 0.01;
             }
         }

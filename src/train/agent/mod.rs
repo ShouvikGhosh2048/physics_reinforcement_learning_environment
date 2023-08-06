@@ -1,8 +1,11 @@
-pub mod genetic;
 pub mod dqn;
+pub mod genetic;
 
-use crate::common::{World, Move, PhysicsEnvironment};
-use self::{genetic::{GeneticAgent, GeneticAlgorithm}, dqn::{DQNAlgorithm, DQNAgent}};
+use self::{
+    dqn::{DQNAgent, DQNAlgorithm},
+    genetic::{GeneticAgent, GeneticAlgorithm},
+};
+use crate::common::{Move, PhysicsEnvironment, World};
 
 use bevy_egui::egui::Ui;
 use crossbeam::channel::{bounded, Receiver};
@@ -14,11 +17,13 @@ pub fn spawn_training_thread(
 ) -> Receiver<(f32, Agent)> {
     let (sender, reciever) = bounded(100);
     let world = (*world).clone();
-    let algorithm = (*algorithm).clone();
-    std::thread::spawn(move || {
-        match algorithm {
-            Algorithm::Genetic(algorithm) => {algorithm.train(world, number_of_steps, sender);}
-            Algorithm::DQN(algorithm) => {algorithm.train(world, number_of_steps, sender);}
+    let algorithm = *algorithm;
+    std::thread::spawn(move || match algorithm {
+        Algorithm::Genetic(algorithm) => {
+            algorithm.train(world, number_of_steps, sender);
+        }
+        Algorithm::Dqn(algorithm) => {
+            algorithm.train(world, number_of_steps, sender);
         }
     });
     reciever
@@ -27,7 +32,7 @@ pub fn spawn_training_thread(
 #[derive(PartialEq, Clone, Copy)]
 pub enum Algorithm {
     Genetic(GeneticAlgorithm),
-    DQN(DQNAlgorithm),
+    Dqn(DQNAlgorithm),
 }
 
 impl Default for Algorithm {
@@ -42,9 +47,7 @@ impl Algorithm {
             Algorithm::Genetic(algorithm) => {
                 algorithm.algorithm_properties_ui(ui);
             }
-            Algorithm::DQN(algorithm) => {
-                algorithm.algorithm_properties_ui(ui)
-            }
+            Algorithm::Dqn(algorithm) => algorithm.algorithm_properties_ui(ui),
         }
     }
 }
@@ -52,18 +55,14 @@ impl Algorithm {
 #[derive(Clone)]
 pub enum Agent {
     Genetic(GeneticAgent),
-    DQN(DQNAgent)
+    Dqn(DQNAgent),
 }
 
 impl Agent {
     pub fn get_move(&mut self, environment: &PhysicsEnvironment) -> Move {
         match self {
-            Agent::Genetic(agent) => {
-                agent.get_move()
-            }
-            Agent::DQN(agent) => {
-                agent.get_move(environment)
-            }
+            Agent::Genetic(agent) => agent.get_move(),
+            Agent::Dqn(agent) => agent.get_move(environment),
         }
     }
 }

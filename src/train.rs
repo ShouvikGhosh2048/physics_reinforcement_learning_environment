@@ -1,10 +1,12 @@
 mod agent;
 
+use self::agent::{
+    dqn::DQNAlgorithm, genetic::GeneticAlgorithm, spawn_training_thread, Agent, Algorithm,
+};
 use crate::common::{
     AppState, PhysicsEnvironment, World, WorldObject, BEVY_TO_PHYSICS_SCALE, PLAYER_DEPTH,
     PLAYER_RADIUS,
 };
-use self::agent::{Agent, Algorithm, spawn_training_thread, genetic::GeneticAlgorithm, dqn::DQNAlgorithm};
 
 use bevy::{prelude::*, sprite::MaterialMesh2dBundle};
 use bevy_egui::{egui, EguiContexts};
@@ -60,7 +62,7 @@ fn ui_system(
 
                             let agent_type = match ui_state.agent {
                                 Algorithm::Genetic(_) => "Genetic",
-                                Algorithm::DQN(_) => "DQN",
+                                Algorithm::Dqn(_) => "DQN",
                             };
                             ui.label("Algorithm: ");
                             egui::ComboBox::from_id_source("Algorithm")
@@ -74,7 +76,7 @@ fn ui_system(
                                     if ui_state.allow_dqn {
                                         ui.selectable_value(
                                             &mut ui_state.agent,
-                                            Algorithm::DQN(DQNAlgorithm::default()),
+                                            Algorithm::Dqn(DQNAlgorithm::default()),
                                             "DQN",
                                         );
                                     }
@@ -155,7 +157,7 @@ fn update_visualization(
     mut camera: Query<&mut Transform, (With<Camera>, Without<RigidBodyId>)>,
 ) {
     if let View::Visualize { environment, agent } = &mut ui_state.view {
-        let player_move = agent.get_move(&environment);
+        let player_move = agent.get_move(environment);
         environment.step(player_move);
 
         for (mut transform, RigidBodyId(rigid_body_handle)) in rigid_bodies.iter_mut() {

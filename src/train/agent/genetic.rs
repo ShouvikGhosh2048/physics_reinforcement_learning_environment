@@ -1,10 +1,10 @@
-use crate::common::{Move, PhysicsEnvironment, World};
 use super::Agent;
+use crate::common::{Move, PhysicsEnvironment, World};
 
-use std::cmp::Ordering;
 use bevy_egui::egui::{DragValue, Ui};
 use crossbeam::channel::Sender;
 use rand::prelude::*;
+use std::cmp::Ordering;
 
 #[derive(Clone)]
 pub struct GeneticAgent {
@@ -35,29 +35,29 @@ pub struct GeneticAlgorithm {
 
 impl Default for GeneticAlgorithm {
     fn default() -> Self {
-        GeneticAlgorithm { number_of_agents: 1000, repeat_move: 20, mutation_rate: 0.1, keep_best: false }
+        GeneticAlgorithm {
+            number_of_agents: 1000,
+            repeat_move: 20,
+            mutation_rate: 0.1,
+            keep_best: false,
+        }
     }
 }
 
 impl GeneticAlgorithm {
     pub fn algorithm_properties_ui(&mut self, ui: &mut Ui) {
-            ui.label("Number of agents: ");
-            ui.add(
-                DragValue::new(&mut self.number_of_agents)
-                    .clamp_range(10..=1000),
-            );
-            ui.end_row();
-            ui.label("Repeat move: ");
-            ui.add(DragValue::new(&mut self.repeat_move).clamp_range(1..=100));
-            ui.end_row();
-            ui.label("Mutation rate: ");
-            ui.add(
-                DragValue::new(&mut self.mutation_rate).clamp_range(0.0..=1.0),
-            );
-            ui.end_row();
-            ui.label("Keep best from previous generation: ");
-            ui.checkbox(&mut self.keep_best, "");
-            ui.end_row();
+        ui.label("Number of agents: ");
+        ui.add(DragValue::new(&mut self.number_of_agents).clamp_range(10..=1000));
+        ui.end_row();
+        ui.label("Repeat move: ");
+        ui.add(DragValue::new(&mut self.repeat_move).clamp_range(1..=100));
+        ui.end_row();
+        ui.label("Mutation rate: ");
+        ui.add(DragValue::new(&mut self.mutation_rate).clamp_range(0.0..=1.0));
+        ui.end_row();
+        ui.label("Keep best from previous generation: ");
+        ui.checkbox(&mut self.keep_best, "");
+        ui.end_row();
     }
 
     pub fn train(&self, world: World, number_of_steps: usize, sender: Sender<(f32, Agent)>) {
@@ -154,9 +154,7 @@ impl GeneticAlgorithm {
 
             for _ in 0..additional_agents {
                 let mut parents = generation
-                    .choose_multiple_weighted(&mut rng, 2, |(score, _)| {
-                        max_score + 1.0 - score
-                    })
+                    .choose_multiple_weighted(&mut rng, 2, |(score, _)| max_score + 1.0 - score)
                     .unwrap();
                 let parent1 = &parents.next().unwrap().1;
                 let parent2 = &parents.next().unwrap().1;
