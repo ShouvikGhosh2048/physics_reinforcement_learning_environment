@@ -210,6 +210,21 @@ impl PhysicsEnvironment {
         }
     }
 
+    pub fn state(&self) -> Option<[f32; 4]> {
+        if let Some(player_handle) = self.player_handle {
+            let player_translation = self.rigid_body_set[player_handle].translation();
+            let player_velocity = self.rigid_body_set[player_handle].linvel();
+            Some([
+                player_translation.x,
+                player_translation.y,
+                player_velocity.x,
+                player_velocity.y,
+            ])
+        } else {
+            None
+        }
+    }
+
     pub fn step(&mut self, player_move: Move) {
         if let Some(player_handle) = self.player_handle {
             let player_translation = self.rigid_body_set[player_handle].translation();
@@ -350,7 +365,7 @@ pub struct GoalDimensions {
     rotation: f32,
 }
 
-#[derive(Default, Clone, Copy)]
+#[derive(Default, Clone, Copy, Debug)]
 pub struct Move {
     pub left: bool,
     pub right: bool,

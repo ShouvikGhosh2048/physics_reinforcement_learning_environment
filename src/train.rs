@@ -1,18 +1,19 @@
-use std::cmp::Ordering;
+mod agent;
 
 use crate::common::{
-    AppState, Move, PhysicsEnvironment, World, WorldObject, BEVY_TO_PHYSICS_SCALE, PLAYER_DEPTH,
+    AppState, PhysicsEnvironment, World, WorldObject, BEVY_TO_PHYSICS_SCALE, PLAYER_DEPTH,
     PLAYER_RADIUS,
 };
+use self::agent::{Agent, Algorithm, spawn_training_thread, genetic::GeneticAlgorithm, dqn::DQNAlgorithm};
 
 use bevy::{prelude::*, sprite::MaterialMesh2dBundle};
 use bevy_egui::{egui, EguiContexts};
-use crossbeam::channel::{bounded, Receiver};
-use rand::prelude::*;
+use crossbeam::channel::Receiver;
 use rapier2d::prelude::*;
 
 pub fn add_train_systems(app: &mut App) {
-    app.add_systems((ui_system, update_visualization).in_set(OnUpdate(AppState::Train)))
+    app.add_system(setup_train.in_schedule(OnEnter(AppState::Train)))
+        .add_systems((ui_system, update_visualization).in_set(OnUpdate(AppState::Train)))
         .add_system(cleanup_train.in_schedule(OnExit(AppState::Train)))
         .insert_resource(UiState::default());
 }
@@ -58,7 +59,8 @@ fn ui_system(
                             ui.end_row();
 
                             let agent_type = match ui_state.agent {
-                                Algorithm::Genetic { .. } => "Genetic",
+                                Algorithm::Genetic(_) => "Genetic",
+                                Algorithm::DQN(_) => "DQN",
                             };
                             ui.label("Algorithm: ");
                             egui::ComboBox::from_id_source("Algorithm")
@@ -66,45 +68,23 @@ fn ui_system(
                                 .show_ui(ui, |ui| {
                                     ui.selectable_value(
                                         &mut ui_state.agent,
-                                        Algorithm::Genetic {
-                                            number_of_agents: 1000,
-                                            repeat_move: 20,
-                                            mutation_rate: 0.1,
-                                            keep_best: false,
-                                        },
+                                        Algorithm::Genetic(GeneticAlgorithm::default()),
                                         "Genetic",
                                     );
+                                    if ui_state.allow_dqn {
+                                        ui.selectable_value(
+                                            &mut ui_state.agent,
+                                            Algorithm::DQN(DQNAlgorithm::default()),
+                                            "DQN",
+                                        );
+                                    }
                                 });
                             ui.end_row();
 
                             ui.label("Algorithm properties:");
                             ui.end_row();
-                            match &mut ui_state.agent {
-                                Algorithm::Genetic {
-                                    number_of_agents,
-                                    repeat_move,
-                                    mutation_rate,
-                                    keep_best,
-                                } => {
-                                    ui.label("Number of agents: ");
-                                    ui.add(
-                                        egui::DragValue::new(number_of_agents)
-                                            .clamp_range(10..=1000),
-                                    );
-                                    ui.end_row();
-                                    ui.label("Repeat move: ");
-                                    ui.add(egui::DragValue::new(repeat_move).clamp_range(1..=100));
-                                    ui.end_row();
-                                    ui.label("Mutation rate: ");
-                                    ui.add(
-                                        egui::DragValue::new(mutation_rate).clamp_range(0.0..=1.0),
-                                    );
-                                    ui.end_row();
-                                    ui.label("Keep best from previous generation: ");
-                                    ui.checkbox(keep_best, "");
-                                    ui.end_row();
-                                }
-                            }
+
+                            ui_state.agent.algorithm_properties_ui(ui);
 
                             if ui.button("Train").clicked() {
                                 ui_state.view = View::Train;
@@ -175,7 +155,7 @@ fn update_visualization(
     mut camera: Query<&mut Transform, (With<Camera>, Without<RigidBodyId>)>,
 ) {
     if let View::Visualize { environment, agent } = &mut ui_state.view {
-        let player_move = agent.get_move();
+        let player_move = agent.get_move(&environment);
         environment.step(player_move);
 
         for (mut transform, RigidBodyId(rigid_body_handle)) in rigid_bodies.iter_mut() {
@@ -193,6 +173,14 @@ fn update_visualization(
     }
 }
 
+fn setup_train(mut ui_state: ResMut<UiState>, world: Res<World>) {
+    let has_non_fixed_block = world
+        .objects
+        .iter()
+        .any(|object| matches!(object.object, WorldObject::Block { fixed } if !fixed));
+    ui_state.allow_dqn = !has_non_fixed_block;
+}
+
 fn cleanup_train(
     mut ui_state: ResMut<UiState>,
     mut commands: Commands,
@@ -202,151 +190,6 @@ fn cleanup_train(
     for entity in visualization_objects.iter() {
         commands.entity(entity).despawn();
     }
-}
-
-fn spawn_training_thread(
-    number_of_steps: usize,
-    algorithm: &Algorithm,
-    world: &World,
-) -> Receiver<(f32, Agent)> {
-    let (sender, reciever) = bounded(100);
-    let world = (*world).clone();
-    let algorithm = (*algorithm).clone();
-    std::thread::spawn(move || {
-        let mut rng = thread_rng();
-
-        match algorithm {
-            Algorithm::Genetic {
-                number_of_agents,
-                repeat_move,
-                mutation_rate,
-                keep_best,
-            } => {
-                let agent_score = |agent: &Vec<Move>| {
-                    let mut environment = PhysicsEnvironment::from_world(&world);
-                    let mut score = f32::INFINITY;
-                    for player_move in agent.iter() {
-                        for _ in 0..repeat_move {
-                            environment.step(*player_move);
-                            score = score.min(environment.distance_to_goals().unwrap());
-
-                            if environment.won {
-                                break;
-                            }
-                        }
-
-                        if environment.won {
-                            break;
-                        }
-                    }
-                    for _ in 0..number_of_steps % repeat_move {
-                        environment.step(Move::default());
-                        score = score.min(environment.distance_to_goals().unwrap());
-
-                        if environment.won {
-                            break;
-                        }
-                    }
-                    score
-                };
-
-                let mut generation = vec![];
-                for _ in 0..number_of_agents {
-                    let mut agent = vec![];
-                    for _ in 0..number_of_steps / repeat_move {
-                        agent.push(Move {
-                            left: rng.gen(),
-                            right: rng.gen(),
-                            up: rng.gen(),
-                        });
-                    }
-
-                    generation.push((agent_score(&agent), agent));
-                }
-
-                loop {
-                    let min_agent = generation
-                        .iter()
-                        .min_by(|(score1, _), (score2, _)| {
-                            if score1 < score2 {
-                                Ordering::Less
-                            } else if score1 > score2 {
-                                Ordering::Greater
-                            } else {
-                                Ordering::Equal
-                            }
-                        })
-                        .unwrap();
-                    let max_score = generation
-                        .iter()
-                        .max_by(|(score1, _), (score2, _)| {
-                            if score1 < score2 {
-                                Ordering::Less
-                            } else if score1 > score2 {
-                                Ordering::Greater
-                            } else {
-                                Ordering::Equal
-                            }
-                        })
-                        .unwrap()
-                        .0;
-                    if sender
-                        .send((
-                            min_agent.0,
-                            Agent::GeneticAgent {
-                                moves: min_agent.1.clone(),
-                                curr: 0,
-                                repeat_move,
-                            },
-                        ))
-                        .is_err()
-                    {
-                        return;
-                    }
-
-                    let mut new_generation = if keep_best {
-                        vec![min_agent.clone()]
-                    } else {
-                        vec![]
-                    };
-                    let additional_agents = number_of_agents - new_generation.len();
-
-                    for _ in 0..additional_agents {
-                        let mut parents = generation
-                            .choose_multiple_weighted(&mut rng, 2, |(score, _)| {
-                                max_score + 1.0 - score
-                            })
-                            .unwrap();
-                        let parent1 = &parents.next().unwrap().1;
-                        let parent2 = &parents.next().unwrap().1;
-
-                        let mut agent = vec![];
-                        for i in 0..number_of_steps / repeat_move {
-                            if rng.gen() {
-                                agent.push(parent1[i]);
-                            } else {
-                                agent.push(parent2[i]);
-                            }
-                        }
-                        for player_move in agent.iter_mut() {
-                            if rng.gen::<f32>() < mutation_rate {
-                                player_move.left = rng.gen();
-                            }
-                            if rng.gen::<f32>() < mutation_rate {
-                                player_move.right = rng.gen();
-                            }
-                            if rng.gen::<f32>() < mutation_rate {
-                                player_move.up = rng.gen();
-                            }
-                        }
-                        new_generation.push((agent_score(&agent), agent));
-                    }
-                    generation = new_generation;
-                }
-            }
-        }
-    });
-    reciever
 }
 
 fn setup_visualization(
@@ -441,6 +284,7 @@ struct UiState {
     view: View,
     agents: Vec<(f32, Agent)>,
     agent_reciever: Option<Receiver<(f32, Agent)>>,
+    allow_dqn: bool, // Currently DQN only supports fixed blocks.
 }
 
 impl Default for UiState {
@@ -451,6 +295,7 @@ impl Default for UiState {
             view: View::default(),
             agents: vec![],
             agent_reciever: None,
+            allow_dqn: true,
         }
     }
 }
@@ -464,56 +309,6 @@ enum View {
         agent: Agent,
         environment: Box<PhysicsEnvironment>,
     },
-}
-
-#[derive(PartialEq, Clone)]
-enum Algorithm {
-    Genetic {
-        number_of_agents: usize,
-        repeat_move: usize,
-        mutation_rate: f32,
-        keep_best: bool,
-    },
-}
-
-impl Default for Algorithm {
-    fn default() -> Self {
-        Algorithm::Genetic {
-            number_of_agents: 1000,
-            repeat_move: 20,
-            mutation_rate: 0.1,
-            keep_best: false,
-        }
-    }
-}
-
-#[derive(Clone)]
-enum Agent {
-    GeneticAgent {
-        moves: Vec<Move>,
-        curr: usize,
-        repeat_move: usize,
-    },
-}
-
-impl Agent {
-    fn get_move(&mut self) -> Move {
-        match self {
-            Agent::GeneticAgent {
-                moves,
-                curr,
-                repeat_move,
-            } => {
-                if *curr / *repeat_move < moves.len() {
-                    let player_move = moves[*curr / *repeat_move];
-                    *curr += 1;
-                    player_move
-                } else {
-                    Move::default()
-                }
-            }
-        }
-    }
 }
 
 #[derive(Component)]
