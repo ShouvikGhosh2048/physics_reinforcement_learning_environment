@@ -888,57 +888,59 @@ fn editor_ui_system(
 
             ui.add_space(10.0);
 
-            ui.horizontal(|ui| {
-                if ui.button("Open").clicked() {
-                    if let Some(path) = rfd::FileDialog::new().pick_file() {
-                        let new_world: Option<World> = fs::read_to_string(path)
-                            .ok()
-                            .and_then(|s| serde_json::from_str(&s).ok());
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                ui.horizontal(|ui| {
+                    if ui.button("Open").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().pick_file() {
+                            let new_world: Option<World> = fs::read_to_string(path)
+                                .ok()
+                                .and_then(|s| serde_json::from_str(&s).ok());
 
-                        if let Some(new_world) = new_world {
-                            let has_player = new_world
-                                .objects
-                                .iter()
-                                .any(|object| matches!(object.object, WorldObject::Player));
+                            if let Some(new_world) = new_world {
+                                let has_player = new_world
+                                    .objects
+                                    .iter()
+                                    .any(|object| matches!(object.object, WorldObject::Player));
 
-                            if has_player {
-                                *world = new_world;
-                                load_world(
-                                    &world,
-                                    &mut commands,
-                                    &objects,
-                                    &transform_editors,
-                                    &mut camera_transform,
-                                    &mut ui_state,
-                                    &mut meshes,
-                                    &mut materials,
-                                );
+                                if has_player {
+                                    *world = new_world;
+                                    load_world(
+                                        &world,
+                                        &mut commands,
+                                        &objects,
+                                        &transform_editors,
+                                        &mut camera_transform,
+                                        &mut ui_state,
+                                        &mut meshes,
+                                        &mut materials,
+                                    );
+                                }
                             }
                         }
                     }
-                }
 
-                if ui.button("Save").clicked() {
-                    if let Some(path) = rfd::FileDialog::new().save_file() {
-                        let objects = objects
-                            .iter()
-                            .map(|(_, object, transform)| ObjectAndTransform {
-                                object: object.clone(),
-                                position: transform.translation.to_array(),
-                                scale: transform.scale.to_array(),
-                                rotation: transform.rotation.to_euler(EulerRot::XYZ).2,
-                            })
-                            .collect();
-                        let world = World { objects };
-                        if fs::write(path, serde_json::to_string(&world).unwrap()).is_err() {
-                            // TODO: Show error in the UI.
-                            println!("Couldn't save the world.");
+                    if ui.button("Save").clicked() {
+                        if let Some(path) = rfd::FileDialog::new().save_file() {
+                            let objects = objects
+                                .iter()
+                                .map(|(_, object, transform)| ObjectAndTransform {
+                                    object: object.clone(),
+                                    position: transform.translation.to_array(),
+                                    scale: transform.scale.to_array(),
+                                    rotation: transform.rotation.to_euler(EulerRot::XYZ).2,
+                                })
+                                .collect();
+                            let world = World { objects };
+                            if fs::write(path, serde_json::to_string(&world).unwrap()).is_err() {
+                                // TODO: Show error in the UI.
+                                println!("Couldn't save the world.");
+                            }
                         }
                     }
-                }
-            });
-
-            ui.add_space(10.0);
+                });
+                ui.add_space(10.0);
+            }
 
             if let Some(selected) = &mut ui_state.selected {
                 let (_, mut object, mut transform) = objects.get_mut(selected.entity).unwrap();
