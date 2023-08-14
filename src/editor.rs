@@ -20,6 +20,12 @@ pub fn add_editor_systems(app: &mut App) {
         .add_system(cleanup_editor.in_schedule(OnExit(AppState::Editor)));
 }
 
+#[derive(Component, Clone)]
+pub enum EditorObject {
+    Player,
+    WorldObject(WorldObject),
+}
+
 #[derive(Component)]
 enum TransformEditor {
     Anchor,
@@ -78,10 +84,10 @@ fn create_ring(
         .id()
 }
 
-impl WorldObject {
+impl EditorObject {
     fn can_drag(&self, transform: &Transform, pointer_position: Vec2) -> bool {
         match self {
-            WorldObject::Player => {
+            EditorObject::Player => {
                 let translation = transform.translation.truncate();
                 let center_offset = Vec2::new(0.0, PLAYER_DEPTH / 2.0);
                 ((pointer_position - translation).x.abs() < PLAYER_RADIUS
@@ -89,7 +95,7 @@ impl WorldObject {
                     || (pointer_position - translation - center_offset).length() < PLAYER_RADIUS
                     || (pointer_position - translation + center_offset).length() < PLAYER_RADIUS
             }
-            WorldObject::Block { .. } | WorldObject::Goal => {
+            EditorObject::WorldObject(_) => {
                 let translation = transform.translation.truncate();
                 let size = transform.scale.truncate();
                 let x_axis = (transform.rotation * Vec3::X).truncate();
@@ -109,7 +115,7 @@ impl WorldObject {
         materials: &mut ResMut<Assets<ColorMaterial>>,
     ) -> Entity {
         match self {
-            WorldObject::Block { fixed } => {
+            EditorObject::WorldObject(WorldObject::Block { fixed }) => {
                 let color = if fixed {
                     Color::BLACK
                 } else {
@@ -125,7 +131,7 @@ impl WorldObject {
                     })
                     .id()
             }
-            WorldObject::Player => commands
+            EditorObject::Player => commands
                 .spawn(self)
                 .insert(MaterialMesh2dBundle {
                     mesh: meshes
@@ -143,7 +149,7 @@ impl WorldObject {
                     ..default()
                 })
                 .id(),
-            WorldObject::Goal => commands
+            EditorObject::WorldObject(WorldObject::Goal) => commands
                 .spawn(self)
                 .insert(MaterialMesh2dBundle {
                     mesh: meshes.add(Mesh::from(shape::Quad::new(Vec2::ONE))).into(),
@@ -211,7 +217,7 @@ impl TransformEditors {
         entity_transform: &Transform,
         transform_editors: &mut Query<
             (Entity, &mut Transform, &TransformEditor),
-            (Without<WorldObject>, Without<Camera>),
+            (Without<EditorObject>, Without<Camera>),
         >,
     ) {
         match &self {
@@ -258,10 +264,10 @@ impl SelectedState {
     fn can_drag(
         &self,
         pointer_position: Vec2,
-        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
+        objects: &mut Query<(Entity, &mut EditorObject, &mut Transform)>,
         transform_editors: &mut Query<
             (Entity, &mut Transform, &TransformEditor),
-            (Without<WorldObject>, Without<Camera>),
+            (Without<EditorObject>, Without<Camera>),
         >,
     ) -> bool {
         for (_, transform, transform_editor) in transform_editors {
@@ -288,7 +294,7 @@ impl SelectedState {
 
     fn clear_selection(
         self,
-        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
+        objects: &mut Query<(Entity, &mut EditorObject, &mut Transform)>,
         commands: &mut Commands,
     ) {
         // TODO: Handle deletion of selected entity?
@@ -301,7 +307,7 @@ impl SelectedState {
         &mut self,
         pointer_position: Vec2,
         camera_scale: f32,
-        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
+        objects: &mut Query<(Entity, &mut EditorObject, &mut Transform)>,
         selected_by_drag: bool,
     ) {
         match &mut self.transform_editors {
@@ -353,10 +359,10 @@ impl SelectedState {
 
     fn drag(
         &mut self,
-        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
+        objects: &mut Query<(Entity, &mut EditorObject, &mut Transform)>,
         transform_editors: &mut Query<
             (Entity, &mut Transform, &TransformEditor),
-            (Without<WorldObject>, Without<Camera>),
+            (Without<EditorObject>, Without<Camera>),
         >,
         initial_pointer_position: Vec2,
         pointer_position: Vec2,
@@ -469,7 +475,7 @@ struct EditorUiState {
 impl EditorUiState {
     fn clear_selection(
         &mut self,
-        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
+        objects: &mut Query<(Entity, &mut EditorObject, &mut Transform)>,
         commands: &mut Commands,
     ) {
         if let Some(selected_state) = self.selected.take() {
@@ -482,7 +488,7 @@ impl EditorUiState {
         world_object: WorldObject,
         position: Vec2,
         camera_scale: f32,
-        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
+        objects: &mut Query<(Entity, &mut EditorObject, &mut Transform)>,
         commands: &mut Commands,
         meshes: &mut ResMut<Assets<Mesh>>,
         materials: &mut ResMut<Assets<ColorMaterial>>,
@@ -496,21 +502,15 @@ impl EditorUiState {
             .unwrap()
             + 1.0; // We can unwrap as player will always be there.
 
-        let transform = match world_object {
-            WorldObject::Block { .. } | WorldObject::Goal => {
-                Transform::from_xyz(position.x, position.y, selection_z_index)
-                    .with_scale(Vec3::new(50.0, 50.0, 1.0))
-            }
-            WorldObject::Player => Transform::from_xyz(position.x, position.y, selection_z_index),
-        };
-        let entity = world_object
-            .clone()
+        let transform = Transform::from_xyz(position.x, position.y, selection_z_index)
+            .with_scale(Vec3::new(50.0, 50.0, 1.0));
+        let entity = EditorObject::WorldObject(world_object.clone())
             .create_entity(transform, commands, meshes, materials);
 
         self.selected = Some(SelectedState {
             entity,
             transform_editors: self.create_transform_editors(
-                &world_object,
+                &EditorObject::WorldObject(world_object),
                 &transform,
                 camera_scale,
                 selection_z_index,
@@ -526,7 +526,7 @@ impl EditorUiState {
         &'a mut self,
         entity: Entity,
         camera_scale: f32,
-        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
+        objects: &mut Query<(Entity, &mut EditorObject, &mut Transform)>,
         commands: &mut Commands,
         meshes: &mut ResMut<Assets<Mesh>>,
         materials: &mut ResMut<Assets<ColorMaterial>>,
@@ -540,12 +540,12 @@ impl EditorUiState {
             .unwrap()
             + 1.0; // We can unwrap as player will always be there.
 
-        let (_, world_object, mut transform) = objects.get_mut(entity).unwrap();
+        let (_, editor_object, mut transform) = objects.get_mut(entity).unwrap();
 
         self.selected = Some(SelectedState {
             entity,
             transform_editors: self.create_transform_editors(
-                &world_object,
+                &editor_object,
                 &transform,
                 camera_scale,
                 selection_z_index,
@@ -561,7 +561,7 @@ impl EditorUiState {
 
     fn create_transform_editors(
         &self,
-        world_object: &WorldObject,
+        editor_object: &EditorObject,
         transform: &Transform,
         camera_scale: f32,
         selection_z_index: f32,
@@ -569,8 +569,8 @@ impl EditorUiState {
         meshes: &mut ResMut<Assets<Mesh>>,
         materials: &mut ResMut<Assets<ColorMaterial>>,
     ) -> TransformEditors {
-        match world_object {
-            WorldObject::Block { .. } | WorldObject::Goal => {
+        match editor_object {
+            EditorObject::WorldObject(_) => {
                 let translation = transform.translation.truncate();
                 let size = transform.scale.truncate();
                 let x_axis = (transform.rotation * Vec3::X).truncate();
@@ -619,7 +619,7 @@ impl EditorUiState {
                     dragging: RectDrag::None(transform.translation.truncate()),
                 }
             }
-            WorldObject::Player => TransformEditors::None {
+            EditorObject::Player => TransformEditors::None {
                 initial_translation: transform.translation.truncate(),
             },
         }
@@ -629,10 +629,10 @@ impl EditorUiState {
         &mut self,
         pointer_position: Vec2,
         pointer_offset_from_center: Vec2,
-        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
+        objects: &mut Query<(Entity, &mut EditorObject, &mut Transform)>,
         transform_editors: &mut Query<
             (Entity, &mut Transform, &TransformEditor),
-            (Without<WorldObject>, Without<Camera>),
+            (Without<EditorObject>, Without<Camera>),
         >,
         camera_transform: &Transform,
         commands: &mut Commands,
@@ -699,10 +699,10 @@ impl EditorUiState {
     fn on_drag(
         &mut self,
         pointer_offset_from_center: Vec2,
-        objects: &mut Query<(Entity, &mut WorldObject, &mut Transform)>,
+        objects: &mut Query<(Entity, &mut EditorObject, &mut Transform)>,
         transform_editors: &mut Query<
             (Entity, &mut Transform, &TransformEditor),
-            (Without<WorldObject>, Without<Camera>),
+            (Without<EditorObject>, Without<Camera>),
         >,
         camera_transform: &mut Transform,
     ) {
@@ -742,8 +742,19 @@ fn setup_editor(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
+    EditorObject::Player.create_entity(
+        Transform::from_translation(Vec3::new(
+            world.player_position[0],
+            world.player_position[1],
+            0.0,
+        )),
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+    );
+
     for object_and_transform in world.objects.iter() {
-        object_and_transform.object.clone().create_entity(
+        EditorObject::WorldObject(object_and_transform.object.clone()).create_entity(
             object_and_transform.transform(),
             &mut commands,
             &mut meshes,
@@ -760,9 +771,9 @@ fn cleanup_editor(
     mut commands: Commands,
     mut world: ResMut<World>,
     mut ui_state: ResMut<EditorUiState>,
-    mut objects: Query<(Entity, &mut WorldObject, &mut Transform)>,
-    transform_editors: Query<Entity, (With<TransformEditor>, Without<WorldObject>)>,
-    mut camera: Query<&mut Transform, (With<Camera>, Without<WorldObject>)>,
+    mut objects: Query<(Entity, &mut EditorObject, &mut Transform)>,
+    transform_editors: Query<Entity, (With<TransformEditor>, Without<EditorObject>)>,
+    mut camera: Query<&mut Transform, (With<Camera>, Without<EditorObject>)>,
 ) {
     ui_state.clear_selection(&mut objects, &mut commands);
 
@@ -772,12 +783,20 @@ fn cleanup_editor(
 
     world.objects.clear();
     for (entity, object, transform) in objects.iter() {
-        world.objects.push(ObjectAndTransform {
-            object: object.clone(),
-            position: transform.translation.to_array(),
-            scale: transform.scale.to_array(),
-            rotation: transform.rotation.to_euler(EulerRot::XYZ).2,
-        });
+        match object {
+            EditorObject::Player => {
+                world.player_position[0] = transform.translation.x;
+                world.player_position[1] = transform.translation.y;
+            }
+            EditorObject::WorldObject(object) => {
+                world.objects.push(ObjectAndTransform {
+                    object: object.clone(),
+                    position: transform.translation.to_array(),
+                    scale: transform.scale.to_array(),
+                    rotation: transform.rotation.to_euler(EulerRot::XYZ).2,
+                });
+            }
+        }
         commands.entity(entity).despawn();
     }
 
@@ -789,10 +808,10 @@ fn cleanup_editor(
 fn load_world(
     world: &ResMut<World>,
     commands: &mut Commands,
-    objects: &Query<(Entity, &mut WorldObject, &mut Transform)>,
+    objects: &Query<(Entity, &mut EditorObject, &mut Transform)>,
     transform_editors: &Query<
         (Entity, &mut Transform, &TransformEditor),
-        (Without<WorldObject>, Without<Camera>),
+        (Without<EditorObject>, Without<Camera>),
     >,
     camera: &mut Transform,
     ui_state: &mut ResMut<EditorUiState>,
@@ -807,8 +826,18 @@ fn load_world(
         commands.entity(entity).despawn();
     }
 
+    EditorObject::Player.create_entity(
+        Transform::from_translation(Vec3::new(
+            world.player_position[0],
+            world.player_position[1],
+            0.0,
+        )),
+        commands,
+        meshes,
+        materials,
+    );
     for object_and_transform in world.objects.iter() {
-        object_and_transform.object.clone().create_entity(
+        EditorObject::WorldObject(object_and_transform.object.clone()).create_entity(
             object_and_transform.transform(),
             commands,
             meshes,
@@ -827,14 +856,14 @@ fn editor_ui_system(
     mut ui_state: ResMut<EditorUiState>,
     mouse_button_input: Res<Input<MouseButton>>,
     mut world: ResMut<World>,
-    mut camera: Query<&mut Transform, (With<Camera>, Without<WorldObject>)>,
-    mut objects: Query<(Entity, &mut WorldObject, &mut Transform)>,
+    mut camera: Query<&mut Transform, (With<Camera>, Without<EditorObject>)>,
+    mut objects: Query<(Entity, &mut EditorObject, &mut Transform)>,
     mut current_materials: Query<&mut Handle<ColorMaterial>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
     mut transform_editors: Query<
         (Entity, &mut Transform, &TransformEditor),
-        (Without<WorldObject>, Without<Camera>),
+        (Without<EditorObject>, Without<Camera>),
     >,
     mut mouse_wheel_events: EventReader<MouseWheel>,
 ) {
@@ -851,9 +880,9 @@ fn editor_ui_system(
                     new_state = Some(AppState::Game);
                 }
 
-                let has_goal = objects
-                    .iter()
-                    .any(|(_, object, _)| matches!(object, WorldObject::Goal));
+                let has_goal = objects.iter().any(|(_, object, _)| {
+                    matches!(object, EditorObject::WorldObject(WorldObject::Goal))
+                });
 
                 if has_goal && ui.button("Train agent on world").clicked() {
                     new_state = Some(AppState::Train);
@@ -873,7 +902,7 @@ fn editor_ui_system(
                 ui_state.drag_end();
                 ui_state.clear_selection(&mut objects, &mut commands);
                 for (entity, object, mut transform) in objects.iter_mut() {
-                    if let WorldObject::Player = &*object {
+                    if let EditorObject::Player = &*object {
                         *transform = Transform::default();
                     } else {
                         commands.entity(entity).despawn();
@@ -896,40 +925,40 @@ fn editor_ui_system(
                             .and_then(|s| serde_json::from_str(&s).ok());
 
                         if let Some(new_world) = new_world {
-                            let has_player = new_world
-                                .objects
-                                .iter()
-                                .any(|object| matches!(object.object, WorldObject::Player));
-
-                            if has_player {
-                                *world = new_world;
-                                load_world(
-                                    &world,
-                                    &mut commands,
-                                    &objects,
-                                    &transform_editors,
-                                    &mut camera_transform,
-                                    &mut ui_state,
-                                    &mut meshes,
-                                    &mut materials,
-                                );
-                            }
+                            *world = new_world;
+                            load_world(
+                                &world,
+                                &mut commands,
+                                &objects,
+                                &transform_editors,
+                                &mut camera_transform,
+                                &mut ui_state,
+                                &mut meshes,
+                                &mut materials,
+                            );
                         }
                     }
                 }
 
                 if ui.button("Save").clicked() {
                     if let Some(path) = rfd::FileDialog::new().save_file() {
-                        let objects = objects
-                            .iter()
-                            .map(|(_, object, transform)| ObjectAndTransform {
-                                object: object.clone(),
-                                position: transform.translation.to_array(),
-                                scale: transform.scale.to_array(),
-                                rotation: transform.rotation.to_euler(EulerRot::XYZ).2,
-                            })
-                            .collect();
-                        let world = World { objects };
+                        let mut world = World::default();
+                        for (_, object, transform) in &objects {
+                            match object {
+                                EditorObject::Player => {
+                                    world.player_position[0] = transform.translation.x;
+                                    world.player_position[1] = transform.translation.y;
+                                }
+                                EditorObject::WorldObject(object) => {
+                                    world.objects.push(ObjectAndTransform {
+                                        object: object.clone(),
+                                        position: transform.translation.to_array(),
+                                        scale: transform.scale.to_array(),
+                                        rotation: transform.rotation.to_euler(EulerRot::XYZ).2,
+                                    });
+                                }
+                            }
+                        }
                         if fs::write(path, serde_json::to_string(&world).unwrap()).is_err() {
                             // TODO: Show error in the UI.
                             println!("Couldn't save the world.");
@@ -954,7 +983,7 @@ fn editor_ui_system(
 
                     ui.add_space(100.0);
 
-                    if !matches!(&*object, WorldObject::Player) && ui.button("Delete").clicked() {
+                    if !matches!(&*object, EditorObject::Player) && ui.button("Delete").clicked() {
                         delete_clicked = true;
                     }
                 });
@@ -974,7 +1003,7 @@ fn editor_ui_system(
                 ui.add_space(10.0);
 
                 match &mut *object {
-                    WorldObject::Player => {
+                    EditorObject::Player => {
                         ui.label("Player");
                         egui::Grid::new("Player grid")
                             .spacing([25.0, 5.0])
@@ -987,7 +1016,7 @@ fn editor_ui_system(
                                 ui.end_row();
                             });
                     }
-                    WorldObject::Block { fixed } => {
+                    EditorObject::WorldObject(WorldObject::Block { fixed }) => {
                         let prev_fixed = *fixed;
                         ui.label("Block");
                         egui::Grid::new("Block grid")
@@ -1033,7 +1062,7 @@ fn editor_ui_system(
                             *selected_material = materials.add(ColorMaterial::from(color));
                         }
                     }
-                    WorldObject::Goal => {
+                    EditorObject::WorldObject(WorldObject::Goal) => {
                         ui.label("Goal");
                         egui::Grid::new("Goal grid")
                             .spacing([25.0, 5.0])
@@ -1094,9 +1123,9 @@ fn editor_ui_system(
                     .show(ui, |ui| {
                         for (entity, object, transform) in objects.iter_mut() {
                             let name = match *object {
-                                WorldObject::Player => "Player",
-                                WorldObject::Block { .. } => "Block",
-                                WorldObject::Goal => "Goal",
+                                EditorObject::Player => "Player",
+                                EditorObject::WorldObject(WorldObject::Block { .. }) => "Block",
+                                EditorObject::WorldObject(WorldObject::Goal) => "Goal",
                             };
                             if ui.button(name).clicked() {
                                 camera_transform.translation.x = transform.translation.x;
@@ -1112,7 +1141,7 @@ fn editor_ui_system(
                                 return;
                             }
 
-                            if !matches!(&*object, WorldObject::Player)
+                            if !matches!(&*object, EditorObject::Player)
                                 && ui.button("Delete").clicked()
                             {
                                 commands.entity(entity).despawn();

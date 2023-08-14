@@ -19,7 +19,29 @@ fn setup_game(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    let mut physics_environment = PhysicsEnvironment::new();
+    let mut physics_environment = PhysicsEnvironment::new(world.player_position);
+
+    let capsule = bevy::prelude::shape::Capsule {
+        radius: PLAYER_RADIUS,
+        rings: 5,
+        depth: PLAYER_DEPTH,
+        latitudes: 10,
+        longitudes: 10,
+        uv_profile: bevy::prelude::shape::CapsuleUvProfile::Uniform,
+    };
+    println!("{:?}", world.player_position);
+    let mut player = commands.spawn(MaterialMesh2dBundle {
+        mesh: meshes.add(capsule.into()).into(),
+        material: materials.add(ColorMaterial::from(Color::GRAY)),
+        transform: Transform::from_translation(Vec3::new(
+            world.player_position[0],
+            world.player_position[1],
+            0.0,
+        )),
+        ..default()
+    });
+    player.insert(GameObject);
+    player.insert(RigidBodyId(physics_environment.player_handle));
 
     for object_and_transform in world.objects.iter() {
         let object = &object_and_transform.object;
@@ -43,26 +65,6 @@ fn setup_game(
                 block.insert(GameObject);
                 if let Some(rigid_body_handle) = rigid_body_handle {
                     block.insert(RigidBodyId(rigid_body_handle));
-                }
-            }
-            WorldObject::Player => {
-                let capsule = bevy::prelude::shape::Capsule {
-                    radius: PLAYER_RADIUS,
-                    rings: 5,
-                    depth: PLAYER_DEPTH,
-                    latitudes: 10,
-                    longitudes: 10,
-                    uv_profile: bevy::prelude::shape::CapsuleUvProfile::Uniform,
-                };
-                let mut player = commands.spawn(MaterialMesh2dBundle {
-                    mesh: meshes.add(capsule.into()).into(),
-                    material: materials.add(ColorMaterial::from(Color::GRAY)),
-                    transform,
-                    ..default()
-                });
-                player.insert(GameObject);
-                if let Some(rigid_body_handle) = rigid_body_handle {
-                    player.insert(RigidBodyId(rigid_body_handle));
                 }
             }
             WorldObject::Goal => {
@@ -137,12 +139,11 @@ fn update_game(
         transform.rotation = Quat::from_rotation_z(rigid_body.rotation().angle());
     }
 
-    if let Some(player_handle) = physics_environment.player_handle {
-        let player_translation = physics_environment.rigid_body_set[player_handle].translation();
-        let mut camera_transform = camera.iter_mut().next().unwrap();
-        camera_transform.translation.x = player_translation.x / BEVY_TO_PHYSICS_SCALE;
-        camera_transform.translation.y = player_translation.y / BEVY_TO_PHYSICS_SCALE;
-    }
+    let player_translation =
+        physics_environment.rigid_body_set[physics_environment.player_handle].translation();
+    let mut camera_transform = camera.iter_mut().next().unwrap();
+    camera_transform.translation.x = player_translation.x / BEVY_TO_PHYSICS_SCALE;
+    camera_transform.translation.y = player_translation.y / BEVY_TO_PHYSICS_SCALE;
 }
 
 fn cleanup_game(mut commands: Commands, game_objects: Query<Entity, With<GameObject>>) {

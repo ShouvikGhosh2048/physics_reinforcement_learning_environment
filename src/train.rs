@@ -157,7 +157,7 @@ fn update_visualization(
         }
 
         let player_translation =
-            environment.rigid_body_set[environment.player_handle.unwrap()].translation();
+            environment.rigid_body_set[environment.player_handle].translation();
         let mut camera_transform = camera.iter_mut().next().unwrap();
         camera_transform.translation.x = player_translation.x / BEVY_TO_PHYSICS_SCALE;
         camera_transform.translation.y = player_translation.y / BEVY_TO_PHYSICS_SCALE;
@@ -182,7 +182,29 @@ fn setup_visualization(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
 ) -> View {
-    let mut environment = PhysicsEnvironment::new();
+    let mut environment = PhysicsEnvironment::new(world.player_position);
+
+    let capsule = bevy::prelude::shape::Capsule {
+        radius: PLAYER_RADIUS,
+        rings: 5,
+        depth: PLAYER_DEPTH,
+        latitudes: 10,
+        longitudes: 10,
+        uv_profile: bevy::prelude::shape::CapsuleUvProfile::Uniform,
+    };
+    let mut player = commands.spawn(MaterialMesh2dBundle {
+        mesh: meshes.add(capsule.into()).into(),
+        material: materials.add(ColorMaterial::from(Color::GRAY)),
+        transform: Transform::from_translation(Vec3::new(
+            world.player_position[0],
+            world.player_position[1],
+            0.0,
+        )),
+        ..default()
+    });
+    player.insert(VisualizationObject);
+    player.insert(Player);
+    player.insert(RigidBodyId(environment.player_handle));
 
     for object_and_transform in world.objects.iter() {
         let object = &object_and_transform.object;
@@ -206,27 +228,6 @@ fn setup_visualization(
                 block.insert(VisualizationObject);
                 if let Some(rigid_body_handle) = rigid_body_handle {
                     block.insert(RigidBodyId(rigid_body_handle));
-                }
-            }
-            WorldObject::Player => {
-                let capsule = bevy::prelude::shape::Capsule {
-                    radius: PLAYER_RADIUS,
-                    rings: 5,
-                    depth: PLAYER_DEPTH,
-                    latitudes: 10,
-                    longitudes: 10,
-                    uv_profile: bevy::prelude::shape::CapsuleUvProfile::Uniform,
-                };
-                let mut player = commands.spawn(MaterialMesh2dBundle {
-                    mesh: meshes.add(capsule.into()).into(),
-                    material: materials.add(ColorMaterial::from(Color::GRAY)),
-                    transform,
-                    ..default()
-                });
-                player.insert(VisualizationObject);
-                player.insert(Player);
-                if let Some(rigid_body_handle) = rigid_body_handle {
-                    player.insert(RigidBodyId(rigid_body_handle));
                 }
             }
             WorldObject::Goal => {
