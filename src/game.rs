@@ -29,7 +29,6 @@ fn setup_game(
         longitudes: 10,
         uv_profile: bevy::prelude::shape::CapsuleUvProfile::Uniform,
     };
-    println!("{:?}", world.player_position);
     let mut player = commands.spawn(MaterialMesh2dBundle {
         mesh: meshes.add(capsule.into()).into(),
         material: materials.add(ColorMaterial::from(Color::GRAY)),

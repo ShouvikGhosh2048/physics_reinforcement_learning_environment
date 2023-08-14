@@ -772,14 +772,9 @@ fn cleanup_editor(
     mut world: ResMut<World>,
     mut ui_state: ResMut<EditorUiState>,
     mut objects: Query<(Entity, &mut EditorObject, &mut Transform)>,
-    transform_editors: Query<Entity, (With<TransformEditor>, Without<EditorObject>)>,
     mut camera: Query<&mut Transform, (With<Camera>, Without<EditorObject>)>,
 ) {
     ui_state.clear_selection(&mut objects, &mut commands);
-
-    for transform_editor in transform_editors.iter() {
-        commands.entity(transform_editor).despawn();
-    }
 
     world.objects.clear();
     for (entity, object, transform) in objects.iter() {
