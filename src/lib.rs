@@ -12,10 +12,10 @@ use train::add_train_systems;
 use bevy::prelude::*;
 use bevy_egui::EguiPlugin;
 
-pub use self::common::World;
-pub use self::common::WorldObject;
 pub use self::common::ObjectAndTransform;
 pub use self::common::PhysicsEnvironment;
+pub use self::common::World;
+pub use self::common::WorldObject;
 
 pub fn run() {
     let mut app = App::new();

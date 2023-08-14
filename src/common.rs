@@ -78,6 +78,12 @@ pub struct PhysicsEnvironment {
     pub won: bool,
 }
 
+impl Default for PhysicsEnvironment {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PhysicsEnvironment {
     pub fn new() -> PhysicsEnvironment {
         PhysicsEnvironment {
