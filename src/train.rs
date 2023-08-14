@@ -1,8 +1,6 @@
 mod agent;
 
-use self::agent::{
-    dqn::DQNAlgorithm, genetic::GeneticAlgorithm, spawn_training_thread, Agent, Algorithm,
-};
+use self::agent::{genetic::GeneticAlgorithm, spawn_training_thread, Agent, Algorithm};
 use crate::common::{
     AppState, PhysicsEnvironment, World, WorldObject, BEVY_TO_PHYSICS_SCALE, PLAYER_DEPTH,
     PLAYER_RADIUS,
@@ -14,8 +12,7 @@ use crossbeam::channel::Receiver;
 use rapier2d::prelude::*;
 
 pub fn add_train_systems(app: &mut App) {
-    app.add_system(setup_train.in_schedule(OnEnter(AppState::Train)))
-        .add_systems((ui_system, update_visualization).in_set(OnUpdate(AppState::Train)))
+    app.add_systems((ui_system, update_visualization).in_set(OnUpdate(AppState::Train)))
         .add_system(cleanup_train.in_schedule(OnExit(AppState::Train)))
         .insert_resource(UiState::default());
 }
@@ -62,7 +59,6 @@ fn ui_system(
 
                             let agent_type = match ui_state.agent {
                                 Algorithm::Genetic(_) => "Genetic",
-                                Algorithm::Dqn(_) => "DQN",
                             };
                             ui.label("Algorithm: ");
                             egui::ComboBox::from_id_source("Algorithm")
@@ -73,13 +69,6 @@ fn ui_system(
                                         Algorithm::Genetic(GeneticAlgorithm::default()),
                                         "Genetic",
                                     );
-                                    if ui_state.allow_dqn {
-                                        ui.selectable_value(
-                                            &mut ui_state.agent,
-                                            Algorithm::Dqn(DQNAlgorithm::default()),
-                                            "DQN",
-                                        );
-                                    }
                                 });
                             ui.end_row();
 
@@ -157,7 +146,7 @@ fn update_visualization(
     mut camera: Query<&mut Transform, (With<Camera>, Without<RigidBodyId>)>,
 ) {
     if let View::Visualize { environment, agent } = &mut ui_state.view {
-        let player_move = agent.get_move(environment);
+        let player_move = agent.get_move();
         environment.step(player_move);
 
         for (mut transform, RigidBodyId(rigid_body_handle)) in rigid_bodies.iter_mut() {
@@ -173,14 +162,6 @@ fn update_visualization(
         camera_transform.translation.x = player_translation.x / BEVY_TO_PHYSICS_SCALE;
         camera_transform.translation.y = player_translation.y / BEVY_TO_PHYSICS_SCALE;
     }
-}
-
-fn setup_train(mut ui_state: ResMut<UiState>, world: Res<World>) {
-    let has_non_fixed_block = world
-        .objects
-        .iter()
-        .any(|object| matches!(object.object, WorldObject::Block { fixed } if !fixed));
-    ui_state.allow_dqn = !has_non_fixed_block;
 }
 
 fn cleanup_train(
@@ -286,7 +267,6 @@ struct UiState {
     view: View,
     agents: Vec<(f32, Agent)>,
     agent_reciever: Option<Receiver<(f32, Agent)>>,
-    allow_dqn: bool, // Currently DQN only supports fixed blocks.
 }
 
 impl Default for UiState {
@@ -297,7 +277,6 @@ impl Default for UiState {
             view: View::default(),
             agents: vec![],
             agent_reciever: None,
-            allow_dqn: true,
         }
     }
 }

@@ -1,11 +1,7 @@
-pub mod dqn;
 pub mod genetic;
 
-use self::{
-    dqn::{DQNAgent, DQNAlgorithm},
-    genetic::{GeneticAgent, GeneticAlgorithm},
-};
-use crate::common::{Move, PhysicsEnvironment, World};
+use self::genetic::{GeneticAgent, GeneticAlgorithm};
+use crate::common::{Move, World};
 
 use bevy_egui::egui::Ui;
 use crossbeam::channel::{bounded, Receiver};
@@ -22,9 +18,6 @@ pub fn spawn_training_thread(
         Algorithm::Genetic(algorithm) => {
             algorithm.train(world, number_of_steps, sender);
         }
-        Algorithm::Dqn(algorithm) => {
-            algorithm.train(world, number_of_steps, sender);
-        }
     });
     reciever
 }
@@ -32,7 +25,6 @@ pub fn spawn_training_thread(
 #[derive(PartialEq, Clone, Copy)]
 pub enum Algorithm {
     Genetic(GeneticAlgorithm),
-    Dqn(DQNAlgorithm),
 }
 
 impl Default for Algorithm {
@@ -47,7 +39,6 @@ impl Algorithm {
             Algorithm::Genetic(algorithm) => {
                 algorithm.algorithm_properties_ui(ui);
             }
-            Algorithm::Dqn(algorithm) => algorithm.algorithm_properties_ui(ui),
         }
     }
 }
@@ -55,14 +46,12 @@ impl Algorithm {
 #[derive(Clone)]
 pub enum Agent {
     Genetic(GeneticAgent),
-    Dqn(DQNAgent),
 }
 
 impl Agent {
-    pub fn get_move(&mut self, environment: &PhysicsEnvironment) -> Move {
+    pub fn get_move(&mut self) -> Move {
         match self {
             Agent::Genetic(agent) => agent.get_move(),
-            Agent::Dqn(agent) => agent.get_move(environment),
         }
     }
 }
