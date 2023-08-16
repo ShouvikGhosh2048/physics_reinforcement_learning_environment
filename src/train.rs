@@ -1,25 +1,47 @@
-mod agent;
-
-use self::agent::{genetic::GeneticAlgorithm, spawn_training_thread, Agent, Algorithm};
-use crate::common::{
-    AppState, PhysicsEnvironment, World, WorldObject, BEVY_TO_PHYSICS_SCALE, PLAYER_DEPTH,
-    PLAYER_RADIUS,
+use crate::{
+    algorithm::{Agent, Algorithm, TrainingDetails},
+    common::{
+        AppState, PhysicsEnvironment, World, WorldObject, BEVY_TO_PHYSICS_SCALE, PLAYER_DEPTH,
+        PLAYER_RADIUS,
+    },
 };
 
 use bevy::{prelude::*, sprite::MaterialMesh2dBundle};
 use bevy_egui::{egui, EguiContexts};
-use crossbeam::channel::Receiver;
+use crossbeam::channel::bounded;
 use rapier2d::prelude::*;
 
-pub fn add_train_systems(app: &mut App) {
-    app.add_systems((ui_system, update_visualization).in_set(OnUpdate(AppState::Train)))
-        .add_system(cleanup_train.in_schedule(OnExit(AppState::Train)))
-        .insert_resource(UiState::default());
+pub fn add_train_systems<
+    AgentType: Agent,
+    Message: Send + Sync + 'static,
+    TrainingDetailsType: TrainingDetails<AgentType, Message>,
+    AlgorithmType: Algorithm<AgentType, Message, TrainingDetailsType>,
+>(
+    app: &mut App,
+) {
+    let ui_state: UiState<AgentType, TrainingDetailsType, AlgorithmType> = UiState::default();
+    app.add_systems(
+        (
+            ui_system::<AgentType, Message, TrainingDetailsType, AlgorithmType>,
+            update_visualization::<AgentType, Message, TrainingDetailsType, AlgorithmType>,
+        )
+            .in_set(OnUpdate(AppState::Train)),
+    )
+    .add_system(
+        cleanup_train::<AgentType, Message, TrainingDetailsType, AlgorithmType>
+            .in_schedule(OnExit(AppState::Train)),
+    )
+    .insert_resource(ui_state);
 }
 
-fn ui_system(
+fn ui_system<
+    AgentType: Agent,
+    Message: Send + Sync + 'static,
+    TrainingDetailsType: TrainingDetails<AgentType, Message>,
+    AlgorithmType: Algorithm<AgentType, Message, TrainingDetailsType>,
+>(
     mut contexts: EguiContexts,
-    mut ui_state: ResMut<UiState>,
+    mut ui_state: ResMut<UiState<AgentType, TrainingDetailsType, AlgorithmType>>,
     mut next_state: ResMut<NextState<AppState>>,
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -30,13 +52,8 @@ fn ui_system(
     egui::Window::new("Train agents")
         .scroll2([false, true])
         .show(contexts.ctx_mut(), |ui| {
-            let UiState {
-                agent_reciever,
-                agents,
-                ..
-            } = &mut *ui_state;
-            if let Some(agent_reciever) = agent_reciever {
-                agents.extend(agent_reciever.try_iter().take(1000)); // Take atmost 1000 at a time.
+            if let Some(agent_reciever) = &mut ui_state.agent_reciever {
+                agent_reciever.recieve_messages();
             }
 
             match &ui_state.view {
@@ -47,50 +64,20 @@ fn ui_system(
 
                     ui.add_space(10.0);
 
-                    egui::Grid::new("Selection grid")
-                        .spacing([25.0, 5.0])
-                        .show(ui, |ui| {
-                            ui.label("Number of steps: ");
-                            ui.add(
-                                egui::DragValue::new(&mut ui_state.number_of_steps)
-                                    .clamp_range(1..=100000),
-                            );
-                            ui.end_row();
+                    ui_state.agent.selection_ui(ui);
 
-                            let agent_type = match ui_state.agent {
-                                Algorithm::Genetic(_) => "Genetic",
-                            };
-                            ui.label("Algorithm: ");
-                            egui::ComboBox::from_id_source("Algorithm")
-                                .selected_text(agent_type)
-                                .show_ui(ui, |ui| {
-                                    ui.selectable_value(
-                                        &mut ui_state.agent,
-                                        Algorithm::Genetic(GeneticAlgorithm::default()),
-                                        "Genetic",
-                                    );
-                                });
-                            ui.end_row();
-
-                            ui.label("Algorithm properties:");
-                            ui.end_row();
-
-                            ui_state.agent.algorithm_properties_ui(ui);
-
-                            if ui.button("Train").clicked() {
-                                ui_state.view = View::Train;
-                                ui_state.agent_reciever = Some(spawn_training_thread(
-                                    ui_state.number_of_steps,
-                                    &ui_state.agent,
-                                    &world,
-                                ));
-                            }
-                            ui.end_row();
-                        });
+                    if ui.button("Train").clicked() {
+                        ui_state.view = View::Train;
+                        let (sender, receiver) = bounded(1000);
+                        let world = world.clone();
+                        let algorithm = ui_state.agent.clone();
+                        std::thread::spawn(move || algorithm.train(world, sender));
+                        ui_state.agent_reciever =
+                            Some(ui_state.agent.training_details_reciever(receiver));
+                    }
                 }
                 View::Train => {
                     let UiState {
-                        agents,
                         view,
                         agent_reciever,
                         ..
@@ -98,24 +85,20 @@ fn ui_system(
                     if ui.button("Back to select").clicked() {
                         *view = View::Select;
                         *agent_reciever = None;
-                        agents.clear();
                     }
 
                     ui.add_space(10.0);
 
-                    for (score, agent) in agents.iter() {
-                        ui.horizontal(|ui| {
-                            ui.label(format!("Score {}", score));
-                            if ui.button("Visualize agent").clicked() {
-                                *view = setup_visualization(
-                                    &world,
-                                    agent,
-                                    &mut commands,
-                                    &mut meshes,
-                                    &mut materials,
-                                );
-                            }
-                        });
+                    if let Some(receiver) = agent_reciever {
+                        if let Some(agent) = receiver.details_ui(ui) {
+                            *view = setup_visualization(
+                                &world,
+                                agent,
+                                &mut commands,
+                                &mut meshes,
+                                &mut materials,
+                            );
+                        }
                     }
                 }
                 View::Visualize { environment, .. } => {
@@ -140,13 +123,18 @@ fn ui_system(
         });
 }
 
-fn update_visualization(
-    mut ui_state: ResMut<UiState>,
+fn update_visualization<
+    AgentType: Agent,
+    Message: Send + Sync + 'static,
+    TrainingDetailsType: TrainingDetails<AgentType, Message>,
+    AlgorithmType: Algorithm<AgentType, Message, TrainingDetailsType>,
+>(
+    mut ui_state: ResMut<UiState<AgentType, TrainingDetailsType, AlgorithmType>>,
     mut rigid_bodies: Query<(&mut Transform, &RigidBodyId)>,
     mut camera: Query<&mut Transform, (With<Camera>, Without<RigidBodyId>)>,
 ) {
     if let View::Visualize { environment, agent } = &mut ui_state.view {
-        let player_move = agent.get_move();
+        let player_move = agent.get_move(environment);
         environment.step(player_move);
 
         for (mut transform, RigidBodyId(rigid_body_handle)) in rigid_bodies.iter_mut() {
@@ -164,8 +152,13 @@ fn update_visualization(
     }
 }
 
-fn cleanup_train(
-    mut ui_state: ResMut<UiState>,
+fn cleanup_train<
+    AgentType: Agent,
+    Message: Send + Sync + 'static,
+    TrainingDetailsType: TrainingDetails<AgentType, Message>,
+    AlgorithmType: Algorithm<AgentType, Message, TrainingDetailsType>,
+>(
+    mut ui_state: ResMut<UiState<AgentType, TrainingDetailsType, AlgorithmType>>,
     mut commands: Commands,
     visualization_objects: Query<Entity, With<VisualizationObject>>,
 ) {
@@ -175,13 +168,13 @@ fn cleanup_train(
     }
 }
 
-fn setup_visualization(
+fn setup_visualization<AgentType: Agent>(
     world: &Res<World>,
-    agent: &Agent,
+    agent: &AgentType,
     commands: &mut Commands,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
-) -> View {
+) -> View<AgentType> {
     let mut environment = PhysicsEnvironment::new(world.player_position);
 
     let capsule = bevy::prelude::shape::Capsule {
@@ -262,28 +255,26 @@ fn cleanup_visulazation(
 }
 
 #[derive(Resource)]
-struct UiState {
-    number_of_steps: usize,
+struct UiState<Agent, TrainingDetails, Algorithm> {
     agent: Algorithm,
-    view: View,
-    agents: Vec<(f32, Agent)>,
-    agent_reciever: Option<Receiver<(f32, Agent)>>,
+    view: View<Agent>,
+    agent_reciever: Option<TrainingDetails>,
 }
 
-impl Default for UiState {
+impl<Agent, TrainingDetails, Algorithm: Default> Default
+    for UiState<Agent, TrainingDetails, Algorithm>
+{
     fn default() -> Self {
         UiState {
-            number_of_steps: 1000,
             agent: Algorithm::default(),
             view: View::default(),
-            agents: vec![],
             agent_reciever: None,
         }
     }
 }
 
 #[derive(Default)]
-enum View {
+enum View<Agent> {
     #[default]
     Select,
     Train,
