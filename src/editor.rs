@@ -787,7 +787,7 @@ fn cleanup_editor(
                 world.objects.push(ObjectAndTransform {
                     object: object.clone(),
                     position: transform.translation.to_array(),
-                    scale: transform.scale.to_array(),
+                    scale: transform.scale.truncate().to_array(),
                     rotation: transform.rotation.to_euler(EulerRot::XYZ).2,
                 });
             }
@@ -948,7 +948,7 @@ fn editor_ui_system(
                                     world.objects.push(ObjectAndTransform {
                                         object: object.clone(),
                                         position: transform.translation.to_array(),
-                                        scale: transform.scale.to_array(),
+                                        scale: transform.scale.truncate().to_array(),
                                         rotation: transform.rotation.to_euler(EulerRot::XYZ).2,
                                     });
                                 }

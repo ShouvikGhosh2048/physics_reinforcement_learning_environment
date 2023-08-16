@@ -27,7 +27,7 @@ pub struct World {
 pub struct ObjectAndTransform {
     pub object: WorldObject,
     pub position: [f32; 3],
-    pub scale: [f32; 3],
+    pub scale: [f32; 2],
     pub rotation: f32,
 }
 
@@ -35,7 +35,7 @@ impl ObjectAndTransform {
     pub fn transform(&self) -> Transform {
         Transform {
             translation: Vec3::from_array(self.position),
-            scale: Vec3::from_array(self.scale),
+            scale: Vec3::from_array([self.scale[0], self.scale[1], 1.0]),
             rotation: Quat::from_rotation_z(self.rotation),
         }
     }
