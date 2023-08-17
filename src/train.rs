@@ -52,8 +52,8 @@ fn ui_system<
     egui::Window::new("Train agents")
         .scroll2([false, true])
         .show(contexts.ctx_mut(), |ui| {
-            if let Some(agent_reciever) = &mut ui_state.agent_reciever {
-                agent_reciever.recieve_messages();
+            if let Some(agent_receiver) = &mut ui_state.agent_receiver {
+                agent_receiver.receive_messages();
             }
 
             match &ui_state.view {
@@ -72,24 +72,24 @@ fn ui_system<
                         let world = world.clone();
                         let algorithm = ui_state.agent.clone();
                         std::thread::spawn(move || algorithm.train(world, sender));
-                        ui_state.agent_reciever =
-                            Some(ui_state.agent.training_details_reciever(receiver));
+                        ui_state.agent_receiver =
+                            Some(ui_state.agent.training_details_receiver(receiver));
                     }
                 }
                 View::Train => {
                     let UiState {
                         view,
-                        agent_reciever,
+                        agent_receiver,
                         ..
                     } = &mut *ui_state;
                     if ui.button("Back to select").clicked() {
                         *view = View::Select;
-                        *agent_reciever = None;
+                        *agent_receiver = None;
                     }
 
                     ui.add_space(10.0);
 
-                    if let Some(receiver) = agent_reciever {
+                    if let Some(receiver) = agent_receiver {
                         if let Some(agent) = receiver.details_ui(ui) {
                             *view = setup_visualization(
                                 &world,
@@ -258,7 +258,7 @@ fn cleanup_visulazation(
 struct UiState<Agent, TrainingDetails, Algorithm> {
     agent: Algorithm,
     view: View<Agent>,
-    agent_reciever: Option<TrainingDetails>,
+    agent_receiver: Option<TrainingDetails>,
 }
 
 impl<Agent, TrainingDetails, Algorithm: Default> Default
@@ -268,7 +268,7 @@ impl<Agent, TrainingDetails, Algorithm: Default> Default
         UiState {
             agent: Algorithm::default(),
             view: View::default(),
-            agent_reciever: None,
+            agent_receiver: None,
         }
     }
 }

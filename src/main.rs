@@ -1,9 +1,8 @@
 // https://stackoverflow.com/a/26953326
 
-use bevy_egui::egui::{self, DragValue, Ui};
-use crossbeam::channel::{Receiver, Sender};
 use physics_reinforcement_learning_environment::{
-    Agent, Algorithm, Move, PhysicsEnvironment, TrainingDetails, World,
+    egui::{self, DragValue, Ui},
+    Agent, Algorithm, Move, PhysicsEnvironment, Receiver, Sender, TrainingDetails, World,
 };
 use rand::prelude::*;
 use std::cmp::Ordering;
@@ -185,7 +184,7 @@ impl Algorithm<GeneticAgent, GeneticMessage, GeneticTrainingDetails> for Genetic
             });
     }
 
-    fn training_details_reciever(
+    fn training_details_receiver(
         &self,
         receiver: Receiver<GeneticMessage>,
     ) -> GeneticTrainingDetails {
@@ -202,7 +201,7 @@ pub struct GeneticTrainingDetails {
 }
 
 impl TrainingDetails<GeneticAgent, GeneticMessage> for GeneticTrainingDetails {
-    fn recieve_messages(&mut self) {
+    fn receive_messages(&mut self) {
         self.agents.extend(self.receiver.try_iter().take(1000));
     }
 
