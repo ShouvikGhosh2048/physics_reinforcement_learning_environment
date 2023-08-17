@@ -101,7 +101,7 @@ fn ui_system<
                         }
                     }
                 }
-                View::Visualize { environment, .. } => {
+                View::Visualize { agent, environment } => {
                     let mut back_to_train = false;
                     if ui.button("Go back to training").clicked() {
                         back_to_train = true;
@@ -114,6 +114,8 @@ fn ui_system<
                         ui.add_space(10.0);
                         ui.label("Won");
                     }
+                    ui.add_space(10.0);
+                    agent.details_ui(ui, environment);
                     if back_to_train {
                         cleanup_visulazation(&mut commands, &visualization_objects);
                         ui_state.view = View::Train;

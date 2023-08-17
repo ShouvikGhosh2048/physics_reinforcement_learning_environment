@@ -7,6 +7,7 @@ use crate::{common::Move, PhysicsEnvironment, World};
 
 pub trait Agent: Clone + Send + Sync + 'static {
     fn get_move(&mut self, environment: &PhysicsEnvironment) -> Move;
+    fn details_ui(&self, ui: &mut Ui, environment: &PhysicsEnvironment);
 }
 
 pub trait TrainingDetails<AgentType: Agent, Message: Send + Sync + 'static>:

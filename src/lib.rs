@@ -20,6 +20,11 @@
 //!     fn get_move(&mut self, _environment: &PhysicsEnvironment) -> Move {
 //!         self.player_move
 //!     }
+//! 
+//!     // Show the agent details UI. Uses egui for the UI.
+//!     fn details_ui(&self, ui: &mut Ui, environment: &PhysicsEnvironment) {
+//!         ui.label(format!("Move: {:?}", self.player_move));
+//!     }
 //! }
 //!
 //! // The training takes places on a seperate thread.

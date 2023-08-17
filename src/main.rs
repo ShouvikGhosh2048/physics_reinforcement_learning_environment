@@ -1,7 +1,7 @@
 // https://stackoverflow.com/a/26953326
 
 use physics_reinforcement_learning_environment::{
-    egui::{self, DragValue, Ui},
+    egui::{self, DragValue, RichText, Ui},
     Agent, Algorithm, Move, PhysicsEnvironment, Receiver, Sender, TrainingDetails, World,
 };
 use rand::prelude::*;
@@ -229,6 +229,49 @@ pub struct GeneticAgent {
 }
 
 impl Agent for GeneticAgent {
+    fn details_ui(&self, ui: &mut Ui, _environment: &PhysicsEnvironment) {
+        ui.label(format!("Repeat move: {}", self.repeat_move));
+        ui.add_space(10.0);
+
+        if self.curr / self.repeat_move < self.moves.len() {
+            let index = self.curr / self.repeat_move;
+            let mut text = format!("{}. ", index + 1);
+            let player_move = self.moves[index];
+            if player_move.up {
+                text += " UP ";
+            }
+            if player_move.left {
+                text += " LEFT ";
+            }
+            if player_move.right {
+                text += " RIGHT ";
+            }
+            ui.label(RichText::new(text).strong());
+        }
+        ui.add_space(10.0);
+
+        for (index, player_move) in self.moves.iter().enumerate() {
+            ui.horizontal(|ui| {
+                let mut text = format!("{}. ", index + 1);
+                if player_move.up {
+                    text += " UP ";
+                }
+                if player_move.left {
+                    text += " LEFT ";
+                }
+                if player_move.right {
+                    text += " RIGHT ";
+                }
+
+                if self.curr / self.repeat_move == index {
+                    ui.label(RichText::new(text).strong());
+                } else {
+                    ui.label(text);
+                }
+            });
+        }
+    }
+
     fn get_move(&mut self, _environment: &PhysicsEnvironment) -> Move {
         if self.curr / self.repeat_move < self.moves.len() {
             let player_move = self.moves[self.curr / self.repeat_move];
