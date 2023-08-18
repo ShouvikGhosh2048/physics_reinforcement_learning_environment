@@ -1,7 +1,7 @@
 use crate::{
     algorithm::{Agent, Algorithm, TrainingDetails},
     common::{
-        AppState, PhysicsEnvironment, World, WorldObject, BEVY_TO_PHYSICS_SCALE, PLAYER_DEPTH,
+        AppState, Environment, World, WorldObject, BEVY_TO_PHYSICS_SCALE, PLAYER_DEPTH,
         PLAYER_RADIUS,
     },
 };
@@ -110,7 +110,7 @@ fn ui_system<
                     if let Some(distance) = environment.distance_to_goals() {
                         ui.label(format!("Distance to goals: {:.3}", distance));
                     }
-                    if environment.won {
+                    if environment.won() {
                         ui.add_space(10.0);
                         ui.label("Won");
                     }
@@ -140,14 +140,14 @@ fn update_visualization<
         environment.step(player_move);
 
         for (mut transform, RigidBodyId(rigid_body_handle)) in rigid_bodies.iter_mut() {
-            let rigid_body = &environment.rigid_body_set[*rigid_body_handle];
+            let rigid_body = &environment.rigid_body_set()[*rigid_body_handle];
             transform.translation.x = rigid_body.translation().x / BEVY_TO_PHYSICS_SCALE;
             transform.translation.y = rigid_body.translation().y / BEVY_TO_PHYSICS_SCALE;
             transform.rotation = Quat::from_rotation_z(rigid_body.rotation().angle());
         }
 
         let player_translation =
-            environment.rigid_body_set[environment.player_handle].translation();
+            environment.rigid_body_set()[environment.player_handle()].translation();
         let mut camera_transform = camera.iter_mut().next().unwrap();
         camera_transform.translation.x = player_translation.x / BEVY_TO_PHYSICS_SCALE;
         camera_transform.translation.y = player_translation.y / BEVY_TO_PHYSICS_SCALE;
@@ -177,7 +177,7 @@ fn setup_visualization<AgentType: Agent>(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<ColorMaterial>>,
 ) -> View<AgentType> {
-    let mut environment = PhysicsEnvironment::new(world.player_position);
+    let mut environment = Environment::new(world.player_position);
 
     let capsule = bevy::prelude::shape::Capsule {
         radius: PLAYER_RADIUS,
@@ -199,7 +199,7 @@ fn setup_visualization<AgentType: Agent>(
     });
     player.insert(VisualizationObject);
     player.insert(Player);
-    player.insert(RigidBodyId(environment.player_handle));
+    player.insert(RigidBodyId(environment.player_handle()));
 
     for object_and_transform in world.objects.iter() {
         let object = &object_and_transform.object;
@@ -282,7 +282,7 @@ enum View<Agent> {
     Train,
     Visualize {
         agent: Agent,
-        environment: Box<PhysicsEnvironment>,
+        environment: Box<Environment>,
     },
 }
 

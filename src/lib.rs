@@ -6,7 +6,7 @@
 //! ```no_run
 //! // We define our agent.
 //! use physics_reinforcement_learning_environment::{
-//!     Move, World, PhysicsEnvironment,
+//!     Move, World, Environment,
 //!     egui::{self, Ui}, Sender, Receiver,
 //!     Agent, TrainingDetails, Algorithm, run
 //! };
@@ -17,12 +17,12 @@
 //!
 //! // We implement the Agent trait for our agent.
 //! impl Agent for SingleMoveAgent {
-//!     fn get_move(&mut self, _environment: &PhysicsEnvironment) -> Move {
+//!     fn get_move(&mut self, _environment: &Environment) -> Move {
 //!         self.player_move
 //!     }
-//! 
+//!
 //!     // Show the agent details UI. Uses egui for the UI.
-//!     fn details_ui(&self, ui: &mut Ui, environment: &PhysicsEnvironment) {
+//!     fn details_ui(&self, ui: &mut Ui, environment: &Environment) {
 //!         ui.label(format!("Move: {:?}", self.player_move));
 //!     }
 //! }
@@ -94,13 +94,13 @@
 //!                         up
 //!                     };
 //!
-//!                     let mut environment = PhysicsEnvironment::from_world(&world);
+//!                     let (mut environment, _) = Environment::from_world(&world);
 //!                     let mut score = f32::INFINITY;
 //!                     for _ in 0..self.number_of_steps {
 //!                         environment.step(player_move);
 //!                         score = score.min(environment.distance_to_goals().unwrap());
 //!                         
-//!                         if environment.won {
+//!                         if environment.won() {
 //!                             break;
 //!                         }
 //!                     }
@@ -159,13 +159,14 @@ use bevy_egui::EguiPlugin;
 pub use self::algorithm::Agent;
 pub use self::algorithm::Algorithm;
 pub use self::algorithm::TrainingDetails;
+pub use self::common::Environment;
 pub use self::common::Move;
 pub use self::common::ObjectAndTransform;
-pub use self::common::PhysicsEnvironment;
 pub use self::common::World;
 pub use self::common::WorldObject;
 pub use bevy_egui::egui;
 pub use crossbeam::channel::{Receiver, Sender};
+pub use rapier2d;
 
 pub fn run<
     AgentType: Agent,

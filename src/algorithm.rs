@@ -1,13 +1,13 @@
 use bevy_egui::egui::Ui;
 use crossbeam::channel::{Receiver, Sender};
 
-use crate::{common::Move, PhysicsEnvironment, World};
+use crate::{common::Move, Environment, World};
 
 // https://stackoverflow.com/questions/75989070/does-static-in-generic-type-definition-refer-to-the-lifetime-of-the-type-itself
 
 pub trait Agent: Clone + Send + Sync + 'static {
-    fn get_move(&mut self, environment: &PhysicsEnvironment) -> Move;
-    fn details_ui(&self, ui: &mut Ui, environment: &PhysicsEnvironment);
+    fn get_move(&mut self, environment: &Environment) -> Move;
+    fn details_ui(&self, ui: &mut Ui, environment: &Environment);
 }
 
 pub trait TrainingDetails<AgentType: Agent, Message: Send + Sync + 'static>:

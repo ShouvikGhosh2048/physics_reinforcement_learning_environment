@@ -48,25 +48,26 @@ pub enum WorldObject {
     Goal,
 }
 
-pub struct PhysicsEnvironment {
-    pub integration_parameters: IntegrationParameters,
-    pub physics_pipeline: PhysicsPipeline,
-    pub island_manager: IslandManager,
-    pub broad_phase: BroadPhase,
-    pub narrow_phase: NarrowPhase,
-    pub impulse_joint_set: ImpulseJointSet,
-    pub multibody_joint_set: MultibodyJointSet,
-    pub ccd_solver: CCDSolver,
-    pub rigid_body_set: RigidBodySet,
-    pub collider_set: ColliderSet,
-    pub query_pipeline: QueryPipeline,
-    pub player_handle: RigidBodyHandle,
-    pub goals: Vec<GoalDimensions>,
-    pub won: bool,
+/// The environment for reinforcement learning.
+pub struct Environment {
+    integration_parameters: IntegrationParameters,
+    physics_pipeline: PhysicsPipeline,
+    island_manager: IslandManager,
+    broad_phase: BroadPhase,
+    narrow_phase: NarrowPhase,
+    impulse_joint_set: ImpulseJointSet,
+    multibody_joint_set: MultibodyJointSet,
+    ccd_solver: CCDSolver,
+    rigid_body_set: RigidBodySet,
+    collider_set: ColliderSet,
+    query_pipeline: QueryPipeline,
+    player_handle: RigidBodyHandle,
+    goals: Vec<GoalDimensions>,
+    won: bool,
 }
 
-impl PhysicsEnvironment {
-    pub fn new(player_position: [f32; 2]) -> PhysicsEnvironment {
+impl Environment {
+    pub fn new(player_position: [f32; 2]) -> Environment {
         let mut rigid_body_set = RigidBodySet::new();
         let mut collider_set = ColliderSet::new();
 
@@ -84,7 +85,7 @@ impl PhysicsEnvironment {
         .build();
         collider_set.insert_with_parent(player_collider, player_handle, &mut rigid_body_set);
 
-        PhysicsEnvironment {
+        Environment {
             integration_parameters: IntegrationParameters::default(),
             physics_pipeline: PhysicsPipeline::new(),
             island_manager: IslandManager::new(),
@@ -102,6 +103,7 @@ impl PhysicsEnvironment {
         }
     }
 
+    /// Adds an object to the environment and returns a RigidBodyHandle if it is a rigid body.
     pub fn add_object(
         &mut self,
         object_and_transform: &ObjectAndTransform,
@@ -156,16 +158,20 @@ impl PhysicsEnvironment {
         }
     }
 
-    pub fn from_world(world: &World) -> PhysicsEnvironment {
-        let mut environment = PhysicsEnvironment::new(world.player_position);
+    /// Creates an environment from a world and returns the world along with rigid body handles for the objects in the world (not the player).
+    pub fn from_world(world: &World) -> (Environment, Vec<Option<RigidBodyHandle>>) {
+        let mut environment = Environment::new(world.player_position);
+        let mut rigid_body_handles = vec![];
 
         for object_and_transform in world.objects.iter() {
-            environment.add_object(object_and_transform);
+            let rigid_body_handle = environment.add_object(object_and_transform);
+            rigid_body_handles.push(rigid_body_handle);
         }
 
-        environment
+        (environment, rigid_body_handles)
     }
 
+    /// Minimum distance from the center of the player to the goals.
     pub fn distance_to_goals(&self) -> Option<f32> {
         let player_translation = self.rigid_body_set[self.player_handle].translation();
         let player_translation = Vec2::new(player_translation.x, player_translation.y);
@@ -188,6 +194,24 @@ impl PhysicsEnvironment {
             .reduce(f32::min)
     }
 
+    pub fn won(&self) -> bool {
+        self.won
+    }
+
+    pub fn rigid_body_set(&self) -> &RigidBodySet {
+        &self.rigid_body_set
+    }
+
+    pub fn collider_set(&self) -> &ColliderSet {
+        &self.collider_set
+    }
+
+    pub fn player_handle(&self) -> RigidBodyHandle {
+        self.player_handle
+    }
+
+    /// Move the environment forward by a single time step, with the player playing the given move.
+    /// If the distance to goals is (approximately) 0.0, the environment is set to be won.
     pub fn step(&mut self, player_move: Move) {
         let player_translation = self.rigid_body_set[self.player_handle].translation();
         let player_lower_center = vector![

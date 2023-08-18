@@ -1,5 +1,5 @@
 use crate::common::{
-    AppState, Move, PhysicsEnvironment, World, WorldObject, BEVY_TO_PHYSICS_SCALE, PLAYER_DEPTH,
+    AppState, Environment, Move, World, WorldObject, BEVY_TO_PHYSICS_SCALE, PLAYER_DEPTH,
     PLAYER_RADIUS,
 };
 
@@ -19,7 +19,7 @@ fn setup_game(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
 ) {
-    let mut physics_environment = PhysicsEnvironment::new(world.player_position);
+    let mut physics_environment = Environment::new(world.player_position);
 
     let capsule = bevy::prelude::shape::Capsule {
         radius: PLAYER_RADIUS,
@@ -40,7 +40,7 @@ fn setup_game(
         ..default()
     });
     player.insert(GameObject);
-    player.insert(RigidBodyId(physics_environment.player_handle));
+    player.insert(RigidBodyId(physics_environment.player_handle()));
 
     for object_and_transform in world.objects.iter() {
         let object = &object_and_transform.object;
@@ -105,7 +105,7 @@ fn game_ui_system(
         });
         ui.add_space(5.0);
         ui.label(format!("Steps: {}", game_state.steps));
-        if game_state.physics_environment.won {
+        if game_state.physics_environment.won() {
             ui.add_space(5.0);
             ui.label("Won!");
         }
@@ -132,14 +132,14 @@ fn update_game(
     *steps += 1;
 
     for (mut transform, RigidBodyId(rigid_body_handle)) in rigid_bodies.iter_mut() {
-        let rigid_body = &physics_environment.rigid_body_set[*rigid_body_handle];
+        let rigid_body = &physics_environment.rigid_body_set()[*rigid_body_handle];
         transform.translation.x = rigid_body.translation().x / BEVY_TO_PHYSICS_SCALE;
         transform.translation.y = rigid_body.translation().y / BEVY_TO_PHYSICS_SCALE;
         transform.rotation = Quat::from_rotation_z(rigid_body.rotation().angle());
     }
 
     let player_translation =
-        physics_environment.rigid_body_set[physics_environment.player_handle].translation();
+        physics_environment.rigid_body_set()[physics_environment.player_handle()].translation();
     let mut camera_transform = camera.iter_mut().next().unwrap();
     camera_transform.translation.x = player_translation.x / BEVY_TO_PHYSICS_SCALE;
     camera_transform.translation.y = player_translation.y / BEVY_TO_PHYSICS_SCALE;
@@ -153,7 +153,7 @@ fn cleanup_game(mut commands: Commands, game_objects: Query<Entity, With<GameObj
 
 #[derive(Resource)]
 struct GameState {
-    physics_environment: PhysicsEnvironment,
+    physics_environment: Environment,
     steps: usize,
 }
 

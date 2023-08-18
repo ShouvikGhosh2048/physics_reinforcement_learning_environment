@@ -2,7 +2,7 @@
 
 use physics_reinforcement_learning_environment::{
     egui::{self, DragValue, RichText, Ui},
-    Agent, Algorithm, Move, PhysicsEnvironment, Receiver, Sender, TrainingDetails, World,
+    Agent, Algorithm, Environment, Move, Receiver, Sender, TrainingDetails, World,
 };
 use rand::prelude::*;
 use std::cmp::Ordering;
@@ -42,19 +42,19 @@ impl Algorithm<GeneticAgent, GeneticMessage, GeneticTrainingDetails> for Genetic
         let mut rng = thread_rng();
 
         let agent_score = |agent: &Vec<Move>| {
-            let mut environment = PhysicsEnvironment::from_world(&world);
+            let (mut environment, _) = Environment::from_world(&world);
             let mut score = f32::INFINITY;
             for player_move in agent.iter() {
                 for _ in 0..self.repeat_move {
                     environment.step(*player_move);
                     score = score.min(environment.distance_to_goals().unwrap());
 
-                    if environment.won {
+                    if environment.won() {
                         break;
                     }
                 }
 
-                if environment.won {
+                if environment.won() {
                     break;
                 }
             }
@@ -62,7 +62,7 @@ impl Algorithm<GeneticAgent, GeneticMessage, GeneticTrainingDetails> for Genetic
                 environment.step(Move::default());
                 score = score.min(environment.distance_to_goals().unwrap());
 
-                if environment.won {
+                if environment.won() {
                     break;
                 }
             }
@@ -229,7 +229,7 @@ pub struct GeneticAgent {
 }
 
 impl Agent for GeneticAgent {
-    fn details_ui(&self, ui: &mut Ui, _environment: &PhysicsEnvironment) {
+    fn details_ui(&self, ui: &mut Ui, _environment: &Environment) {
         ui.label(format!("Repeat move: {}", self.repeat_move));
         ui.add_space(10.0);
 
@@ -272,7 +272,7 @@ impl Agent for GeneticAgent {
         }
     }
 
-    fn get_move(&mut self, _environment: &PhysicsEnvironment) -> Move {
+    fn get_move(&mut self, _environment: &Environment) -> Move {
         if self.curr / self.repeat_move < self.moves.len() {
             let player_move = self.moves[self.curr / self.repeat_move];
             self.curr += 1;
