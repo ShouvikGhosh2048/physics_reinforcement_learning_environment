@@ -15,7 +15,6 @@ opt-level = 3
 bevy = "0.10.1"
 bevy_egui = "0.20.3"
 crossbeam = "0.8"
-dfdx = "0.13.0"
 rand = "0.8.5"
 rapier2d = { version = "0.17.2", features = [ "enhanced-determinism" ] }
 rfd = "0.11.4"
