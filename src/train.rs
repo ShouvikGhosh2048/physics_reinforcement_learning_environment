@@ -66,6 +66,8 @@ fn ui_system<
 
                     ui_state.agent.selection_ui(ui);
 
+                    ui.add_space(10.0);
+
                     if ui.button("Train").clicked() {
                         ui_state.view = View::Train;
                         let (sender, receiver) = bounded(1000);
