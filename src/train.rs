@@ -71,11 +71,13 @@ fn ui_system<
                     if ui.button("Train").clicked() {
                         ui_state.view = View::Train;
                         let (sender, receiver) = bounded(1000);
+
+                        ui_state.agent_receiver =
+                            Some(ui_state.agent.training_details_receiver(&world, receiver));
+
                         let world = world.clone();
                         let algorithm = ui_state.agent.clone();
                         std::thread::spawn(move || algorithm.train(world, sender));
-                        ui_state.agent_receiver =
-                            Some(ui_state.agent.training_details_receiver(receiver));
                     }
                 }
                 View::Train => {

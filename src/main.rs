@@ -186,6 +186,7 @@ impl Algorithm<GeneticAgent, GeneticMessage, GeneticTrainingDetails> for Genetic
 
     fn training_details_receiver(
         &self,
+        _world: &World,
         receiver: Receiver<GeneticMessage>,
     ) -> GeneticTrainingDetails {
         GeneticTrainingDetails {

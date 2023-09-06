@@ -129,6 +129,7 @@
 //!     // the training thread and returns the TrainingDetails.
 //!     fn training_details_receiver(
 //!         &self,
+//!         _world: &World,
 //!         receiver: Receiver<SingleMoveMessage>,
 //!     ) -> SingleMoveTrainingDetails {
 //!         SingleMoveTrainingDetails {

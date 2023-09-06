@@ -25,5 +25,9 @@ pub trait Algorithm<
 {
     fn selection_ui(&mut self, ui: &mut Ui);
     fn train(&self, world: World, sender: Sender<Message>);
-    fn training_details_receiver(&self, receiver: Receiver<Message>) -> TrainingDetailsType;
+    fn training_details_receiver(
+        &self,
+        world: &World,
+        receiver: Receiver<Message>,
+    ) -> TrainingDetailsType;
 }
